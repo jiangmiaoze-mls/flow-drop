@@ -33,6 +33,14 @@
           "image": "./assets/images/splash-icon.png",
           "imageWidth": 76
         }
+      ],
+      [
+        "expo-camera",
+        {
+          "barcodeScannerEnabled": true,
+          "cameraPermission": "允许 FlowDrop 使用相机扫描电脑端的配对二维码",
+          "recordAudioAndroid": false
+        }
       ]
     ],
     "experiments": {
