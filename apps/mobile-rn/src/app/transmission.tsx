@@ -1,9 +1,13 @@
 import {useLocalSearchParams, useRouter} from 'expo-router'
 import {SymbolView} from 'expo-symbols'
-import {useCallback, useState} from 'react'
+import {useCallback, useRef, useState} from 'react'
 import {Pressable, ScrollView, StyleSheet, Text, View} from 'react-native'
 import {SafeAreaView} from 'react-native-safe-area-context'
+
 import {Header} from '@/components/Header'
+import TextDeliveryBottomSheet, {
+  type TextDeliveryBottomSheetRef,
+} from '@/components/TextDeliveryBottomSheet'
 import {PAGE_HORIZONTAL_PADDING} from '@/constants/layout'
 import {useTheme} from '@/hooks/use-theme'
 import * as DocumentPicker from 'expo-document-picker'
@@ -22,6 +26,7 @@ const TRANSFER_PROGRESS = 24.5 / 128
 export default function Transmission() {
   const theme = useTheme()
   const router = useRouter()
+  const textDeliveryBottomSheetRef = useRef<TextDeliveryBottomSheetRef>(null)
   const params = useLocalSearchParams<TransmissionParams>()
   const [isQueuedItemVisible, setIsQueuedItemVisible] = useState(true)
   const deviceName = params.name || '未知设备'
@@ -40,8 +45,20 @@ export default function Transmission() {
     setIsQueuedItemVisible(false)
   }, [])
 
+  const handleOpenTextDelivery = useCallback(() => {
+    textDeliveryBottomSheetRef.current?.present()
+  }, [])
+
   const chooseFile = async () => {
-    const result = await DocumentPicker.getDocumentAsync()
+    const result = await DocumentPicker.getDocumentAsync({
+      multiple: true
+    })
+
+    if (result.canceled) return
+
+    for (let asset of result.assets) {
+      console.log(asset)
+    }
   }
 
   return (
@@ -117,6 +134,7 @@ export default function Transmission() {
           <Pressable
             accessibilityLabel="投递文字"
             accessibilityRole="button"
+            onPress={handleOpenTextDelivery}
             style={({pressed}) => [
               styles.actionCard,
               {backgroundColor: theme.background, borderColor: theme.backgroundElement},
@@ -197,6 +215,11 @@ export default function Transmission() {
           </View>
         ) : null}
       </ScrollView>
+
+      <TextDeliveryBottomSheet
+        ref={textDeliveryBottomSheetRef}
+        targetName={deviceName}
+      />
     </SafeAreaView>
   )
 }
