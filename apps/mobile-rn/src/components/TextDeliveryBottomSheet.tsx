@@ -7,7 +7,7 @@ import {
 } from '@gorhom/bottom-sheet'
 import {SymbolView} from 'expo-symbols'
 import {forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState} from 'react'
-import {BackHandler, Keyboard, Pressable, StyleSheet, Text, View} from 'react-native'
+import {BackHandler, Keyboard, Pressable, StyleSheet, Text} from 'react-native'
 
 import {PAGE_HORIZONTAL_PADDING} from '@/constants/layout'
 import {useStableBottomSheetGesture} from '@/hooks/use-stable-bottom-sheet-gesture'
@@ -158,18 +158,6 @@ const TextDeliveryBottomSheet = forwardRef<
             value={text}
           />
 
-          <View style={styles.targetRow}>
-            <View style={styles.targetIcon}>
-              <SymbolView
-                name={{ios: 'laptopcomputer', android: 'computer', web: 'computer'}}
-                size={20}
-                tintColor="#FFFFFF"
-              />
-            </View>
-            <Text style={[styles.targetLabel, {color: theme.textSecondary}]}>正在投递至</Text>
-            <Text numberOfLines={1} style={[styles.targetName, {color: theme.text}]}>{targetName}</Text>
-          </View>
-
           <Pressable
             accessibilityLabel={`立即投递文字至 ${targetName}`}
             accessibilityRole="button"
@@ -205,7 +193,8 @@ export default TextDeliveryBottomSheet
 const styles = StyleSheet.create({
   content: {
     paddingVertical: 20,
-    paddingHorizontal: PAGE_HORIZONTAL_PADDING
+    paddingHorizontal: PAGE_HORIZONTAL_PADDING,
+    gap: 20
   },
   input: {
     borderRadius: 16,
@@ -214,29 +203,6 @@ const styles = StyleSheet.create({
     lineHeight: 23,
     paddingHorizontal: 18,
     paddingVertical: 16
-  },
-  targetRow: {
-    alignItems: 'center',
-    flexDirection: 'row',
-    height: 54
-  },
-  targetIcon: {
-    alignItems: 'center',
-    backgroundColor: '#202020',
-    borderRadius: 7,
-    height: 28,
-    justifyContent: 'center',
-    width: 28
-  },
-  targetLabel: {
-    fontSize: 13,
-    marginLeft: 10
-  },
-  targetName: {
-    flex: 1,
-    fontSize: 13,
-    fontWeight: '600',
-    marginLeft: 4
   },
   submitButton: {
     alignItems: 'center',

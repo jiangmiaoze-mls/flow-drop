@@ -1,22 +1,14 @@
-import {
-  BottomSheetBackdrop,
-  type BottomSheetBackdropProps,
-  BottomSheetModal,
-  BottomSheetView
-} from '@gorhom/bottom-sheet'
 import {useRouter} from 'expo-router'
 import {SymbolView} from 'expo-symbols'
-import {useCallback, useEffect, useRef, useState} from 'react'
-import {BackHandler, FlatList, Pressable, StyleSheet, Text, View} from 'react-native'
+import {useCallback, useRef} from 'react'
+import {FlatList, Pressable, StyleSheet, Text, View} from 'react-native'
 
-import ConnectionBottomSheetContent from '@/components/ConnectionBottomSheetContent'
+import ConnectionBottomSheet, {type ConnectionBottomSheetRef} from '@/components/ConnectionBottomSheet'
 import {DiscoveryPulse} from '@/components/DiscoveryPulse'
 import {Header} from '@/components/Header'
 import {PAGE_HORIZONTAL_PADDING} from '@/constants/layout'
-import {useStableBottomSheetGesture} from '@/hooks/use-stable-bottom-sheet-gesture'
 import {useTheme} from '@/hooks/use-theme'
 import type {Device} from '@/types/temp'
-
 
 const DEVICES: Device[] = [
   {id: 'work-pc', name: 'WORK-PC', ip: '192.168.1.100', type: 'desktop', authorized: true},
@@ -85,27 +77,12 @@ function DeviceCard({device, onPress}: DeviceCardProps) {
 
 export default function FindDevice() {
   const theme = useTheme()
-  const bottomSheetRef = useRef<BottomSheetModal>(null)
-  const [isBottomSheetPresented, setIsBottomSheetPresented] = useState(false)
+  const connectionSheetRef = useRef<ConnectionBottomSheetRef>(null)
   const router = useRouter()
-
-  useEffect(() => {
-    if (!isBottomSheetPresented) {
-      return
-    }
-
-    const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
-      bottomSheetRef.current?.dismiss()
-      return true
-    })
-
-    return () => subscription.remove()
-  }, [isBottomSheetPresented])
 
   const handleDevicePress = useCallback((device: Device) => {
     if (!device.authorized) {
-      setIsBottomSheetPresented(true)
-      bottomSheetRef.current?.present()
+      connectionSheetRef.current?.present()
       return
     }
 
@@ -121,23 +98,9 @@ export default function FindDevice() {
     })
   }, [router])
 
-  const handleBottomSheetDismiss = useCallback(() => {
-    setIsBottomSheetPresented(false)
-  }, [])
-
   const handleConfirmConnection = useCallback((_code: string) => {
-    bottomSheetRef.current?.dismiss()
+    connectionSheetRef.current?.dismiss()
   }, [])
-
-  const renderBackdrop = useCallback((props: BottomSheetBackdropProps) => (
-    <BottomSheetBackdrop
-      {...props}
-      appearsOnIndex={0}
-      disappearsOnIndex={-1}
-      opacity={0.38}
-      pressBehavior="close"
-    />
-  ), [])
 
   const renderDevice = useCallback(({item}: { item: Device }) => (
     <DeviceCard device={item} onPress={handleDevicePress}/>
@@ -162,24 +125,11 @@ export default function FindDevice() {
         style={styles.list}
       />
 
-      <BottomSheetModal
-        backdropComponent={renderBackdrop}
-        backgroundStyle={{backgroundColor: theme.background}}
-        enableContentPanningGesture={false}
-        enableDismissOnClose
-        enableDynamicSizing
-        enableHandlePanningGesture
-        enableOverDrag={false}
-        enablePanDownToClose
-        gestureEventsHandlersHook={useStableBottomSheetGesture}
-        handleIndicatorStyle={{backgroundColor: theme.textSecondary}}
-        maxDynamicContentSize={620}
-        onDismiss={handleBottomSheetDismiss}
-        ref={bottomSheetRef}>
-        <BottomSheetView style={styles.bottomSheetContent}>
-          <ConnectionBottomSheetContent onConfirm={handleConfirmConnection}/>
-        </BottomSheetView>
-      </BottomSheetModal>
+      {/* 极简调用的新组件 */}
+      <ConnectionBottomSheet
+        ref={connectionSheetRef}
+        onConfirm={handleConfirmConnection}
+      />
     </View>
   )
 }
@@ -287,8 +237,5 @@ const styles = StyleSheet.create({
   },
   separator: {
     height: 14
-  },
-  bottomSheetContent: {
-    alignItems: 'stretch'
   }
 })
