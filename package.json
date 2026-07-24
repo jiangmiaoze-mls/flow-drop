@@ -1,0 +1,18 @@
+{
+  "name": "flow-drop",
+  "version": "1.0.0",
+  "description": "",
+  "private": true,
+  "scripts": {
+    "mobile:dev": "pnpm --filter mobile-rn dev",
+    "mobile:build:android": "pnpm --filter mobile-rn build:android",
+
+    "web:dev": "pnpm --filter local-web dev",
+
+    "agent:start": "pnpm --filter windows-agent start",
+    "agent:dev": "pnpm --filter windows-agent dev"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC"
+}

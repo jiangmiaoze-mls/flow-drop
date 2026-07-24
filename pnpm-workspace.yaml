@@ -1,0 +1,8 @@
+packages:
+  - 'packages/*'
+  - 'apps/*'
+
+overrides:
+  brace-expansion: 5.0.7
+  expo-dev-launcher: 57.0.8
+  expo-dev-menu: 57.0.8
