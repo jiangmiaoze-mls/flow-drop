@@ -1,7 +1,7 @@
 import {useRouter} from 'expo-router'
 import {SymbolView} from 'expo-symbols'
-import {useCallback, useRef} from 'react'
-import {FlatList, Pressable, StyleSheet, Text, View} from 'react-native'
+import {useCallback, useEffect, useRef} from 'react'
+import {FlatList, Linking, Pressable, StyleSheet, Text, View} from 'react-native'
 
 import ConnectionBottomSheet, {type ConnectionBottomSheetRef} from '@/components/ConnectionBottomSheet'
 import {DiscoveryPulse} from '@/components/DiscoveryPulse'
@@ -9,6 +9,9 @@ import {Header} from '@/components/Header'
 import {PAGE_HORIZONTAL_PADDING} from '@/constants/layout'
 import {useTheme} from '@/hooks/use-theme'
 import type {Device} from '@/types/temp'
+import {usePermissionsStore} from '@/store/usePermissionsStore'
+import {useShallow} from 'zustand/react/shallow'
+import {useAccessFineLocationPermission} from '@/hooks/usePermissions'
 
 
 const DEVICES: Device[] = [
@@ -18,29 +21,64 @@ const DEVICES: Device[] = [
   {id: 'mac-1-design', name: 'MAC-STUDIO-DESIGN', ip: '192.168.1.112', type: 'laptop'}
 ]
 
+function PermissionsTips() {
+  const theme = useTheme()
+
+  return (
+    <View style={[styles.permissionsTip, {
+      backgroundColor: theme.backgroundElement,
+      borderColor: theme.backgroundSelected
+    }]}>
+      <SymbolView
+        name={{ios: 'questionmark.circle', android: 'help_outline', web: 'help_outline'}}
+        size={25}
+        tintColor={theme.textSecondary}
+      />
+      <View style={styles.permissionsTipContent}>
+        <Text style={[styles.permissionsTipText, {color: theme.textSecondary}]}>未获取权限。</Text>
+        <Pressable
+          accessibilityRole="link"
+          accessibilityLabel="查看权限授权引导"
+          hitSlop={6}
+          onPress={() => void Linking.openSettings()}>
+          <Text style={[styles.permissionsGuideText, {color: theme.text}]}>去设置开启</Text>
+        </Pressable>
+      </View>
+    </View>
+  )
+}
+
 function HomeListHeader() {
   const theme = useTheme()
+  const accessFineLocationAuthorize = usePermissionsStore(state => state.accessFineLocationAuthorize)
 
   return (
     <View style={styles.listHeader}>
       <View style={styles.discoverySection}>
         <DiscoveryPulse/>
-        <Text style={[styles.discoveryText, {color: theme.textSecondary}]}>正在寻找局域网中的电脑...</Text>
-        <Pressable
-          accessibilityLabel="手动输入 IP 连接"
-          accessibilityRole="button"
-          style={({pressed}) => [
-            styles.manualConnectButton,
-            {backgroundColor: theme.backgroundElement},
-            pressed && styles.manualConnectButtonPressed
-          ]}>
-          <SymbolView
-            name={{ios: 'keyboard', android: 'keyboard', web: 'keyboard'}}
-            size={20}
-            tintColor={theme.textSecondary}
-          />
-          <Text style={[styles.manualConnectText, {color: theme.textSecondary}]}>手动输入 IP 连接</Text>
-        </Pressable>
+
+        {
+          accessFineLocationAuthorize ?
+            <>
+              <Text style={[styles.discoveryText, {color: theme.textSecondary}]}>正在寻找局域网中的电脑...</Text>
+              <Pressable
+                accessibilityLabel="手动输入 IP 连接"
+                accessibilityRole="button"
+                style={({pressed}) => [
+                  styles.manualConnectButton,
+                  {backgroundColor: theme.backgroundElement},
+                  pressed && styles.manualConnectButtonPressed
+                ]}>
+                <SymbolView
+                  name={{ios: 'keyboard', android: 'keyboard', web: 'keyboard'}}
+                  size={20}
+                  tintColor={theme.textSecondary}
+                />
+                <Text style={[styles.manualConnectText, {color: theme.textSecondary}]}>手动输入 IP 连接</Text>
+              </Pressable>
+            </> :
+            <PermissionsTips/>
+        }
       </View>
     </View>
   )
@@ -122,6 +160,27 @@ export default function FindDevice() {
     <DeviceCard device={item} onPress={handleDevicePress}/>
   ), [handleDevicePress])
 
+  const [accessFineLocationAuthorize, accessFineLocationGranted, setAccessFineLocation] = usePermissionsStore(
+    useShallow((state) => ([
+      state.accessFineLocationAuthorize,
+      state.accessFineLocationGranted,
+      state.setAccessFineLocation
+    ]))
+  )
+  const {requestAccessFineLocationPermission} = useAccessFineLocationPermission()
+
+  const requestPermission = async () => {
+    if (accessFineLocationAuthorize) {
+      return
+    }
+
+    const res = await requestAccessFineLocationPermission()
+    setAccessFineLocation(res)
+  }
+  useEffect(() => {
+    void requestPermission()
+  }, [])
+
   return (
     <View style={[styles.screen, {backgroundColor: theme.background}]}>
       <Header>
@@ -193,6 +252,33 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '600',
     marginLeft: 9
+  },
+  permissionsTip: {
+    alignItems: 'center',
+    alignSelf: 'stretch',
+    borderRadius: 14,
+    borderWidth: 1,
+    flexDirection: 'row',
+    marginHorizontal: PAGE_HORIZONTAL_PADDING,
+    marginTop: 22,
+    minHeight: 78,
+    paddingHorizontal: 18
+  },
+  permissionsTipContent: {
+    flex: 1,
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    marginLeft: 15,
+    minWidth: 0
+  },
+  permissionsTipText: {
+    fontSize: 16,
+    lineHeight: 24
+  },
+  permissionsGuideText: {
+    fontSize: 16,
+    lineHeight: 24,
+    textDecorationLine: 'underline'
   },
   deviceCard: {
     alignItems: 'center',
