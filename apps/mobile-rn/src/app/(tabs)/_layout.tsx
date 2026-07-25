@@ -51,11 +51,11 @@ export default function TabsLayout() {
         <Tabs.Screen
           name="trustManagement"
           options={{
-            title: '信任管理',
+            title: '设备管理',
             headerShown: false,
             tabBarIcon: ({color}) => (
               <SymbolView
-                name={{ios: 'checkmark.shield', android: 'shield', web: 'shield'}}
+                name={{ios: 'desktopcomputer', android: 'desktop_windows', web: 'desktop_windows'}}
                 size={23}
                 tintColor={color}
               />
