@@ -10,12 +10,16 @@ import {
   SectionList,
   StyleSheet,
   Text,
-  TextInput,
+  TextInput, TouchableOpacity,
   useWindowDimensions,
   View
 } from 'react-native'
 
 import {Header} from '@/components/Header'
+import TransmissionRecordDetailBottomSheet, {
+  type TransmissionRecordDetail,
+  type TransmissionRecordDetailBottomSheetRef
+} from '@/components/TransmissionRecordDetailBottomSheet'
 import TransmissionRecordFilterBottomSheet, {
   TRANSMISSION_RECORD_FILE_TYPE_ICONS,
   type TransmissionRecordFilter,
@@ -28,9 +32,11 @@ import {useTheme} from '@/hooks/use-theme'
 
 type RecordStatus = 'success' | 'interrupted'
 type RecordFileType = TransmissionRecordFileType
+type TransferDirection = 'receive' | 'send'
 
 type TransferRecord = {
   detail: string
+  direction?: TransferDirection
   fileType?: RecordFileType
   id: string
   name: string
@@ -82,30 +88,45 @@ const STATUS_CONFIG: Record<RecordStatus, {
   }
 }
 
+const TRANSFER_DIRECTION_CONFIG: Record<TransferDirection, {
+  icon: SymbolViewProps['name']
+  label: string
+}> = {
+  send: {
+    icon: {ios: 'arrow.up.right', android: 'north_east', web: 'north_east'},
+    label: '发送'
+  },
+  receive: {
+    icon: {ios: 'arrow.down.left', android: 'south_west', web: 'south_west'},
+    label: '接收'
+  }
+}
+
 const ALL_RECORD_SECTIONS: RecordSection[] = [
   {
     title: '今天',
     data: [
-      {detail: '14.2 MB', fileType: 'document', id: 'q3-report', name: 'Q3_Financial_Report.pdf', status: 'success', time: '10:42'},
-      {detail: '剪贴板', fileType: 'text', id: 'release-note', name: '今晚 20:00 发布新版客户端', status: 'success', time: '09:36'},
+      {detail: '14.2 MB', direction: 'send', fileType: 'document', id: 'q3-report', name: 'Q3_Financial_Report.pdf', status: 'success', time: '10:42'},
+      {detail: '剪贴板', direction: 'receive', fileType: 'text', id: 'release-note', name: '今晚 20:00 发布新版客户端', status: 'success', time: '09:36'},
       {
         detail: '剪贴板',
+        direction: 'receive',
         fileType: 'link',
         id: 'design-system-link',
         name: 'https://designsystem.flo...',
         status: 'success',
         time: '09:15'
       },
-      {detail: '4.1 MB', fileType: 'image', id: 'img-8921', name: 'IMG_8921.HEIC', status: 'interrupted', time: '08:30'},
-      {detail: '86.4 MB', fileType: 'video', id: 'product-demo', name: 'Product_Demo.mp4', status: 'success', time: '08:12'}
+      {detail: '4.1 MB', direction: 'receive', fileType: 'image', id: 'img-8921', name: 'IMG_8921.HEIC', status: 'interrupted', time: '08:30'},
+      {detail: '86.4 MB', direction: 'send', fileType: 'video', id: 'product-demo', name: 'Product_Demo.mp4', status: 'success', time: '08:12'}
     ]
   },
   {
     title: '昨天',
     data: [
-      {detail: '1.2 GB', fileType: 'document', id: 'assets-zip', name: 'Assets_V2_Final.zip', status: 'success', time: '16:45'},
-      {detail: '剪贴板', fileType: 'text', id: 'handoff-note', name: '交接说明已同步到对方设备', status: 'interrupted', time: '14:28'},
-      {detail: '41.7 MB', fileType: 'video', id: 'launch-video', name: 'Launch_Recap.mov', status: 'success', time: '10:06'}
+      {detail: '1.2 GB', direction: 'receive', fileType: 'document', id: 'assets-zip', name: 'Assets_V2_Final.zip', status: 'success', time: '16:45'},
+      {detail: '剪贴板', direction: 'send', fileType: 'text', id: 'handoff-note', name: '交接说明已同步到对方设备', status: 'interrupted', time: '14:28'},
+      {detail: '41.7 MB', direction: 'send', fileType: 'video', id: 'launch-video', name: 'Launch_Recap.mov', status: 'success', time: '10:06'}
     ]
   }
 ]
@@ -122,9 +143,9 @@ const DEVICE_GROUPS: DeviceGroup[] = [
       {detail: '14.2 MB', id: 'device-q3-rep11ort', name: 'Q3_Financial_Report.pdf', status: 'success', time: '10:42'},
       {detail: '14.2 MB', id: 'device-q3-r11eport', name: 'Q3_Financial_Report.pdf', status: 'success', time: '10:42'},
       {detail: '14.2 MB', id: 'devic11e-q3-report', name: 'Q3_Financial_Report.pdf', status: 'success', time: '10:42'},
-      {detail: '86.4 MB', fileType: 'video', id: 'device-product-demo', name: 'Product_Demo.mp4', status: 'success', time: '09:47'},
-      {detail: '剪贴板', fileType: 'text', id: 'device-handoff-note', name: '请在下午三点前确认素材', status: 'interrupted', time: '09:32'},
-      {detail: '6.8 MB', fileType: 'image', id: 'device-cover-image', name: 'Cover_Artwork.png', status: 'success', time: '09:21'},
+      {detail: '86.4 MB', direction: 'send', fileType: 'video', id: 'device-product-demo', name: 'Product_Demo.mp4', status: 'success', time: '09:47'},
+      {detail: '剪贴板', direction: 'receive', fileType: 'text', id: 'device-handoff-note', name: '请在下午三点前确认素材', status: 'interrupted', time: '09:32'},
+      {detail: '6.8 MB', direction: 'send', fileType: 'image', id: 'device-cover-image', name: 'Cover_Artwork.png', status: 'success', time: '09:21'},
       {
         detail: '剪贴板',
         fileType: 'link',
@@ -138,11 +159,11 @@ const DEVICE_GROUPS: DeviceGroup[] = [
   {
     deviceName: 'MAC-STUDIO-DESIGN',
     records: [
-      {detail: '4.1 MB', fileType: 'image', id: 'device-img-8921', name: 'IMG_8921.HEIC', status: 'interrupted', time: '08:30'},
-      {detail: '1.2 GB', fileType: 'document', id: 'device-assets-zip', name: 'Assets_V2_Final.zip', status: 'success', time: '16:45'},
-      {detail: '剪贴板', fileType: 'link', id: 'device-brief-link', name: 'https://flowdrop.design/brief', status: 'success', time: '15:18'},
-      {detail: '剪贴板', fileType: 'text', id: 'device-copy-note', name: '品牌图形已按深色模式调整', status: 'success', time: '12:06'},
-      {detail: '41.7 MB', fileType: 'video', id: 'device-launch-video', name: 'Launch_Recap.mov', status: 'interrupted', time: '11:20'}
+      {detail: '4.1 MB', direction: 'receive', fileType: 'image', id: 'device-img-8921', name: 'IMG_8921.HEIC', status: 'interrupted', time: '08:30'},
+      {detail: '1.2 GB', direction: 'receive', fileType: 'document', id: 'device-assets-zip', name: 'Assets_V2_Final.zip', status: 'success', time: '16:45'},
+      {detail: '剪贴板', direction: 'send', fileType: 'link', id: 'device-brief-link', name: 'https://flowdrop.design/brief', status: 'success', time: '15:18'},
+      {detail: '剪贴板', direction: 'receive', fileType: 'text', id: 'device-copy-note', name: '品牌图形已按深色模式调整', status: 'success', time: '12:06'},
+      {detail: '41.7 MB', direction: 'send', fileType: 'video', id: 'device-launch-video', name: 'Launch_Recap.mov', status: 'interrupted', time: '11:20'}
     ]
   }
 ]
@@ -176,6 +197,10 @@ function getRecordFileType(record: TransferRecord): RecordFileType {
   return 'document'
 }
 
+function getTransferDirection(record: TransferRecord): TransferDirection {
+  return record.direction ?? (record.id.startsWith('device-') ? 'receive' : 'send')
+}
+
 function matchesFilter(record: TransferRecord, filter: TransmissionRecordFilter) {
   const fileTypeMatches = filter.fileTypes.length === 0 || filter.fileTypes.includes(getRecordFileType(record))
   const statusMatches = filter.statuses.length === 0
@@ -186,20 +211,29 @@ function matchesFilter(record: TransferRecord, filter: TransmissionRecordFilter)
 }
 
 function RecordRow({
+  dateLabel,
   isFirst,
   isLast,
+  onPress,
   record
 }: {
+  dateLabel: string
   isFirst: boolean
   isLast: boolean
+  onPress: (record: TransferRecord, dateLabel: string) => void
   record: TransferRecord
 }) {
   const theme = useTheme()
   const config = STATUS_CONFIG[record.status]
   const fileType = getRecordFileType(record)
+  const direction = TRANSFER_DIRECTION_CONFIG[getTransferDirection(record)]
 
   return (
-    <View
+    <TouchableOpacity
+      accessibilityLabel={`查看 ${record.name} 的传输详情`}
+      accessibilityRole="button"
+      activeOpacity={.75}
+      onPress={() => onPress(record, dateLabel)}
       style={[
         styles.recordRow,
         {
@@ -230,6 +264,14 @@ function RecordRow({
           <Text style={[styles.recordMeta, {color: theme.textSecondary}]}>{record.detail}</Text>
           <Text style={[styles.metaDivider, {color: theme.textSecondary}]}>•</Text>
           <Text style={[styles.recordMeta, {color: theme.textSecondary}]}>{record.time}</Text>
+          <View style={styles.directionIcon}>
+            <SymbolView
+              accessibilityLabel={direction.label}
+              name={direction.icon}
+              size={14}
+              tintColor={theme.textSecondary}
+            />
+          </View>
         </View>
       </View>
 
@@ -239,7 +281,7 @@ function RecordRow({
         </Text>
         <View style={[styles.statusDot, {backgroundColor: config.dotColor}]}/>
       </View>
-    </View>
+    </TouchableOpacity>
   )
 }
 
@@ -256,10 +298,12 @@ function EmptyState() {
 function FilteredRecordList({
   filter,
   normalizedQuery,
+  onRecordPress,
   sections
 }: {
   filter: TransmissionRecordFilter
   normalizedQuery: string
+  onRecordPress: (record: TransferRecord, dateLabel: string) => void
   sections: RecordSection[]
 }) {
   const theme = useTheme()
@@ -283,8 +327,10 @@ function FilteredRecordList({
       ListEmptyComponent={EmptyState}
       renderItem={({item, index, section}) => (
         <RecordRow
+          dateLabel={section.title}
           isFirst={index === 0}
           isLast={index === section.data.length - 1}
+          onPress={onRecordPress}
           record={item}
         />
       )}
@@ -305,6 +351,7 @@ function FilteredRecordList({
 export default function TransmissionRecord() {
   const theme = useTheme()
   const {width} = useWindowDimensions()
+  const detailSheetRef = useRef<TransmissionRecordDetailBottomSheetRef>(null)
   const filterSheetRef = useRef<TransmissionRecordFilterBottomSheetRef>(null)
   const pagerRef = useRef<ScrollViewType>(null)
   const scrollX = useRef(new Animated.Value(0)).current
@@ -344,6 +391,16 @@ export default function TransmissionRecord() {
 
   const handleOpenFilter = useCallback(() => {
     filterSheetRef.current?.present()
+  }, [])
+
+  const handleOpenRecordDetail = useCallback((record: TransferRecord, dateLabel: string) => {
+    const detail: TransmissionRecordDetail = {
+      ...record,
+      dateLabel,
+      direction: getTransferDirection(record),
+      fileType: getRecordFileType(record)
+    }
+    detailSheetRef.current?.present(detail)
   }, [])
 
   return (
@@ -429,11 +486,21 @@ export default function TransmissionRecord() {
         showsHorizontalScrollIndicator={false}>
 
         <View style={[styles.page, {width}]}> 
-          <FilteredRecordList filter={filter} sections={ALL_RECORD_SECTIONS} normalizedQuery={normalizedQuery}/>
+          <FilteredRecordList
+            filter={filter}
+            normalizedQuery={normalizedQuery}
+            onRecordPress={handleOpenRecordDetail}
+            sections={ALL_RECORD_SECTIONS}
+          />
         </View>
 
         <View style={[styles.page, {width}]}> 
-          <FilteredRecordList filter={filter} sections={deviceSections} normalizedQuery={normalizedQuery}/>
+          <FilteredRecordList
+            filter={filter}
+            normalizedQuery={normalizedQuery}
+            onRecordPress={handleOpenRecordDetail}
+            sections={deviceSections}
+          />
         </View>
       </ScrollView>
 
@@ -442,6 +509,7 @@ export default function TransmissionRecord() {
         onApply={setFilter}
         value={filter}
       />
+      <TransmissionRecordDetailBottomSheet ref={detailSheetRef}/>
     </View>
   )
 }
@@ -493,9 +561,10 @@ const styles = StyleSheet.create({
   recordIcon: {alignItems: 'center', borderRadius: 8, height: 43, justifyContent: 'center', width: 43},
   recordInfo: {flex: 1, marginLeft: 16, minWidth: 0},
   recordName: {fontSize: 16, fontWeight: '500'},
-  recordMetaRow: {alignItems: 'center', flexDirection: 'row', marginTop: 3},
-  recordMeta: {fontFamily: 'monospace', fontSize: 14},
-  metaDivider: {fontSize: 13, marginHorizontal: 7},
+  recordMetaRow: {alignItems: 'center', flexDirection: 'row', marginTop: 2},
+  recordMeta: {fontFamily: 'monospace', fontSize: 13},
+  metaDivider: {fontSize: 12, marginHorizontal: 5},
+  directionIcon: {marginLeft: 5},
   statusRow: {alignItems: 'center', flexDirection: 'row', marginLeft: 8},
   statusText: {fontSize: 14, fontWeight: '500'},
   statusDot: {borderRadius: 4, height: 8, marginLeft: 8, width: 8},
