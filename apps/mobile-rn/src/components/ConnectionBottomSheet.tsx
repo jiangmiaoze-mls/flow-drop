@@ -4,16 +4,17 @@ import {
   BottomSheetModal,
   BottomSheetView
 } from '@gorhom/bottom-sheet'
-import {type BarcodeScanningResult, CameraView, PermissionStatus, useCameraPermissions} from 'expo-camera'
+import {type BarcodeScanningResult, CameraView} from 'expo-camera'
+import {PermissionStatus} from 'expo-location'
 import {SymbolView} from 'expo-symbols'
-import {forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState} from 'react'
+import {forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState} from 'react'
 import type {NativeScrollEvent, NativeSyntheticEvent, ScrollView as ScrollViewType} from 'react-native'
 import {
   Animated,
+  ActivityIndicator,
   AppState,
   BackHandler,
   Easing,
-  Linking,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -23,6 +24,7 @@ import {
 } from 'react-native'
 
 import {PAGE_HORIZONTAL_PADDING} from '@/constants/layout'
+import {useCameraPermission} from '@/hooks/usePermissions'
 import {useStableBottomSheetGesture} from '@/hooks/use-stable-bottom-sheet-gesture'
 import {useTheme} from '@/hooks/use-theme'
 
@@ -56,10 +58,20 @@ const ConnectionBottomSheet = forwardRef<ConnectionBottomSheetRef, ConnectionBot
     const pagerRef = useRef<ScrollViewType>(null)
     const scrollX = useRef(new Animated.Value(0)).current
     const scanLineY = useRef(new Animated.Value(0)).current
-    const hasRequestedCameraPermission = useRef(false)
     const hasConfirmedScan = useRef(false)
-    const [cameraPermission, requestCameraPermission, getCameraPermission] = useCameraPermissions()
+    const hasRequestedCameraForScannerEntry = useRef(false)
+    const targetPage = useRef<PageIndex>(0)
+    const pendingCameraPermissionFlow = useRef<'request' | 'settings' | null>(null)
+    const shouldReopenScannerAfterSettings = useRef(false)
+    const {
+      authorizeCameraPermission,
+      cameraPermission,
+      checkCameraPermission,
+      requestCameraPermission,
+    } = useCameraPermission()
     const [activePage, setActivePage] = useState<PageIndex>(0)
+    const [isPagerTransitioning, setIsPagerTransitioning] = useState(false)
+    const [isScannerPageVisible, setIsScannerPageVisible] = useState(false)
     const [isPresented, setIsPresented] = useState(false)
 
     const [digits, setDigits] = useState(() => {
@@ -75,12 +87,16 @@ const ConnectionBottomSheet = forwardRef<ConnectionBottomSheetRef, ConnectionBot
     const segmentWidth = pageWidth - PAGE_HORIZONTAL_PADDING * 2
     const pagerHeight = Math.max(350, Math.min(390, windowHeight * 0.45))
     const contentHeight = pagerHeight + 72
+    const sheetSnapPoints = useMemo(() => [contentHeight + 20], [contentHeight])
     const scanFrameSize = Math.min(224, segmentWidth * 0.7)
     const scanLineTravel = scanFrameSize - SCAN_FRAME_INSET * 2 - 2
     // --------------------------------------------
 
     const isCodeComplete = digits.every(Boolean)
-    const isCameraActive = activePage === 1 && cameraPermission?.granted === true
+    const hasCameraPermission = cameraPermission.status === PermissionStatus.GRANTED
+    const shouldRenderCameraPlaceholder = isScannerPageVisible && hasCameraPermission
+    const isCameraActive = activePage === 1 && !isPagerTransitioning && shouldRenderCameraPlaceholder
+    const shouldShowCameraPermissionGuide = cameraPermission.resolved && !hasCameraPermission
 
     const indicatorWidth = (segmentWidth - SEGMENT_PADDING * 2) / 2
     const indicatorTranslateX = scrollX.interpolate({
@@ -89,11 +105,62 @@ const ConnectionBottomSheet = forwardRef<ConnectionBottomSheetRef, ConnectionBot
       extrapolate: 'clamp'
     })
 
-    // 暴露 ref 方法
-    const present = useCallback(() => {
+    const resetPager = useCallback(() => {
+      hasConfirmedScan.current = false
+      hasRequestedCameraForScannerEntry.current = false
+      targetPage.current = 0
+      scrollX.setValue(0)
+      setActivePage(0)
+      setIsPagerTransitioning(false)
+      setIsScannerPageVisible(false)
+      pagerRef.current?.scrollTo({animated: false, x: 0})
+    }, [scrollX])
+
+    const presentScannerPage = useCallback(() => {
+      hasConfirmedScan.current = false
+      // 授权弹窗结束后不再自动二次请求；未授权时直接显示授权引导。
+      hasRequestedCameraForScannerEntry.current = true
+      targetPage.current = 1
+      scrollX.setValue(pageWidth)
+      setActivePage(1)
+      setIsPagerTransitioning(false)
+      setIsScannerPageVisible(true)
       setIsPresented(true)
       bottomSheetRef.current?.present()
-    }, [])
+
+      requestAnimationFrame(() => {
+        scrollX.setValue(pageWidth)
+        setActivePage(1)
+        setIsPagerTransitioning(false)
+        setIsScannerPageVisible(true)
+        pagerRef.current?.scrollTo({animated: false, x: pageWidth})
+      })
+    }, [pageWidth, scrollX])
+
+    const startCameraPermissionRequest = useCallback(async () => {
+      const permission = await checkCameraPermission()
+
+      if (permission.status !== PermissionStatus.UNDETERMINED) return
+
+      pendingCameraPermissionFlow.current = 'request'
+      bottomSheetRef.current?.dismiss()
+    }, [checkCameraPermission])
+
+    const handleAuthorizeCamera = useCallback(async () => {
+      const permission = await checkCameraPermission()
+
+      pendingCameraPermissionFlow.current = permission.status === PermissionStatus.UNDETERMINED
+        ? 'request'
+        : 'settings'
+      bottomSheetRef.current?.dismiss()
+    }, [checkCameraPermission])
+
+    // 暴露 ref 方法
+    const present = useCallback(() => {
+      resetPager()
+      setIsPresented(true)
+      bottomSheetRef.current?.present()
+    }, [resetPager])
 
     const dismiss = useCallback(() => {
       bottomSheetRef.current?.dismiss()
@@ -114,47 +181,72 @@ const ConnectionBottomSheet = forwardRef<ConnectionBottomSheetRef, ConnectionBot
 
     const handleDismiss = useCallback(() => {
       setIsPresented(false)
-    }, [])
+      resetPager()
 
-    // 自定义背景板渲染（防误触修正版）
+      const pendingFlow = pendingCameraPermissionFlow.current
+      pendingCameraPermissionFlow.current = null
+
+      if (pendingFlow === 'request') {
+        void (async () => {
+          try {
+            await requestCameraPermission()
+          } finally {
+            presentScannerPage()
+          }
+        })()
+        return
+      }
+
+      if (pendingFlow === 'settings') {
+        shouldReopenScannerAfterSettings.current = true
+        void authorizeCameraPermission()
+      }
+    }, [authorizeCameraPermission, presentScannerPage, requestCameraPermission, resetPager])
+
+    const handleSheetChange = useCallback((index: number) => {
+      if (index < 0 || targetPage.current !== 1) return
+
+      requestAnimationFrame(() => {
+        pagerRef.current?.scrollTo({animated: false, x: pageWidth})
+      })
+    }, [pageWidth])
+
+    useEffect(() => {
+      const subscription = AppState.addEventListener('change', (nextState) => {
+        if (nextState !== 'active' || !shouldReopenScannerAfterSettings.current) return
+
+        shouldReopenScannerAfterSettings.current = false
+        void checkCameraPermission().finally(presentScannerPage)
+      })
+
+      return () => subscription.remove()
+    }, [checkCameraPermission, presentScannerPage])
+
     const renderBackdrop = useCallback((props: BottomSheetBackdropProps) => (
       <BottomSheetBackdrop
         {...props}
         appearsOnIndex={0}
         disappearsOnIndex={-1}
         opacity={0.38}
-        pressBehavior="none" // 禁用默认关闭行为
-      >
-        <Pressable
-          style={StyleSheet.absoluteFill}
-          onPress={dismiss} // 完全由我们自己的全屏层接管背景点击来关闭
-        />
-      </BottomSheetBackdrop>
-    ), [dismiss])
-
-    // 权限与动画相关副作用
-    useEffect(() => {
-      const shouldRequestPermission = activePage === 1
-        && cameraPermission?.status === PermissionStatus.UNDETERMINED
-        && cameraPermission.canAskAgain
-        && !hasRequestedCameraPermission.current
-
-      if (!shouldRequestPermission) return
-
-      hasRequestedCameraPermission.current = true
-      void requestCameraPermission()
-    }, [activePage, cameraPermission, requestCameraPermission])
+        pressBehavior="close"
+      />
+    ), [])
 
     useEffect(() => {
-      if (activePage !== 1 || cameraPermission?.granted || cameraPermission?.canAskAgain !== false) return
+      const hasSettledOnScannerPage = activePage === 1 && !isPagerTransitioning
 
-      const subscription = AppState.addEventListener('change', (nextState) => {
-        if (nextState === 'active') {
-          void getCameraPermission()
+      if (!hasSettledOnScannerPage) {
+        if (activePage === 0) {
+          hasRequestedCameraForScannerEntry.current = false
         }
-      })
-      return () => subscription.remove()
-    }, [activePage, cameraPermission, getCameraPermission])
+        return
+      }
+
+      if (hasRequestedCameraForScannerEntry.current) return
+
+      hasRequestedCameraForScannerEntry.current = true
+      void startCameraPermissionRequest()
+    }, [activePage, isPagerTransitioning, startCameraPermissionRequest])
 
     useEffect(() => {
       if (activePage === 1) {
@@ -195,17 +287,31 @@ const ConnectionBottomSheet = forwardRef<ConnectionBottomSheetRef, ConnectionBot
 
     // 交互逻辑
     const selectPage = useCallback((page: PageIndex) => {
-      setActivePage(page)
+      if (page === activePage) return
+
+      setIsPagerTransitioning(true)
+      setIsScannerPageVisible(page === 1)
       pagerRef.current?.scrollTo({animated: true, x: page * pageWidth})
-    }, [pageWidth])
+    }, [activePage, pageWidth])
+
+    const handleScrollBeginDrag = useCallback(() => {
+      setIsPagerTransitioning(true)
+    }, [])
 
     const handleMomentumScrollEnd = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
       const nextPage = Math.round(event.nativeEvent.contentOffset.x / pageWidth) === 0 ? 0 : 1
       setActivePage(nextPage)
+      setIsPagerTransitioning(false)
+      setIsScannerPageVisible(nextPage === 1)
     }, [pageWidth])
 
     const handleScroll = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
-      scrollX.setValue(event.nativeEvent.contentOffset.x)
+      const offsetX = event.nativeEvent.contentOffset.x
+      scrollX.setValue(offsetX)
+      setIsScannerPageVisible((current) => {
+        const next = offsetX > 0
+        return current === next ? current : next
+      })
     }, [scrollX])
 
     const inputDigit = useCallback((digit: string) => {
@@ -227,14 +333,6 @@ const ConnectionBottomSheet = forwardRef<ConnectionBottomSheetRef, ConnectionBot
       setSelectedIndex(deleteIndex)
     }, [digits, selectedIndex])
 
-    const handleAuthorizeCamera = useCallback(async () => {
-      if (!cameraPermission || cameraPermission.canAskAgain) {
-        await requestCameraPermission()
-        return
-      }
-      await Linking.openSettings()
-    }, [cameraPermission, requestCameraPermission])
-
     const handleBarcodeScanned = useCallback(({data}: BarcodeScanningResult) => {
       if (!data || !onConfirm || hasConfirmedScan.current) return
       hasConfirmedScan.current = true
@@ -247,15 +345,16 @@ const ConnectionBottomSheet = forwardRef<ConnectionBottomSheetRef, ConnectionBot
         backgroundStyle={{backgroundColor: theme.background}}
         enableContentPanningGesture={false}
         enableDismissOnClose
-        enableDynamicSizing
+        enableDynamicSizing={false}
         handleComponent={() => null}
         enableHandlePanningGesture={false}
         enablePanDownToClose={false}
         enableOverDrag={false}
         gestureEventsHandlersHook={useStableBottomSheetGesture}
-        maxDynamicContentSize={620}
+        onChange={handleSheetChange}
         onDismiss={handleDismiss}
-        ref={bottomSheetRef}>
+        ref={bottomSheetRef}
+        snapPoints={sheetSnapPoints}>
         <BottomSheetView style={styles.bottomSheetContent}>
           <View style={[styles.root, {backgroundColor: theme.background, height: contentHeight}]}>
             <View style={styles.segmentContent}>
@@ -280,7 +379,9 @@ const ConnectionBottomSheet = forwardRef<ConnectionBottomSheetRef, ConnectionBot
             <View style={[styles.pagerViewport, {width: pageWidth, height: pagerHeight}]}>
               <ScrollView
                 bounces={false}
+                contentOffset={{x: activePage * pageWidth, y: 0}}
                 horizontal
+                onScrollBeginDrag={handleScrollBeginDrag}
                 onMomentumScrollEnd={handleMomentumScrollEnd}
                 onScroll={handleScroll}
                 contentContainerStyle={[styles.pagerContent, {height: pagerHeight}]}
@@ -397,8 +498,14 @@ const ConnectionBottomSheet = forwardRef<ConnectionBottomSheetRef, ConnectionBot
                         </View>
                       </View>
                     </View>
-                  ) : (
+                  ) : shouldShowCameraPermissionGuide ? (
                     <CameraPermissionContent onAuthorize={handleAuthorizeCamera}/>
+                  ) : shouldRenderCameraPlaceholder ? (
+                    <View style={styles.cameraViewport}/>
+                  ) : (
+                    <View style={[styles.cameraViewport, styles.cameraLoading]}>
+                      <ActivityIndicator color="#FFFFFF"/>
+                    </View>
                   )}
                 </View>
               </ScrollView>
@@ -616,6 +723,10 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     flex: 1,
     overflow: 'hidden'
+  },
+  cameraLoading: {
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   scanOverlay: {
     ...StyleSheet.absoluteFill,

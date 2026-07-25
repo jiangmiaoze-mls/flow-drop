@@ -1,7 +1,7 @@
 import {useRouter} from 'expo-router'
 import {SymbolView} from 'expo-symbols'
 import {useCallback, useEffect, useRef} from 'react'
-import {FlatList, Linking, Pressable, StyleSheet, Text, View} from 'react-native'
+import {FlatList, Pressable, StyleSheet, Text, View} from 'react-native'
 
 import ConnectionBottomSheet, {type ConnectionBottomSheetRef} from '@/components/ConnectionBottomSheet'
 import {DiscoveryPulse} from '@/components/DiscoveryPulse'
@@ -9,8 +9,6 @@ import {Header} from '@/components/Header'
 import {PAGE_HORIZONTAL_PADDING} from '@/constants/layout'
 import {useTheme} from '@/hooks/use-theme'
 import type {Device} from '@/types/temp'
-import {usePermissionsStore} from '@/store/usePermissionsStore'
-import {useShallow} from 'zustand/react/shallow'
 import {useAccessFineLocationPermission} from '@/hooks/usePermissions'
 
 
@@ -21,7 +19,11 @@ const DEVICES: Device[] = [
   {id: 'mac-1-design', name: 'MAC-STUDIO-DESIGN', ip: '192.168.1.112', type: 'laptop'}
 ]
 
-function PermissionsTips() {
+type PermissionsTipsProps = {
+  onOpenSettings: () => void
+}
+
+function PermissionsTips({onOpenSettings}: PermissionsTipsProps) {
   const theme = useTheme()
 
   return (
@@ -40,7 +42,7 @@ function PermissionsTips() {
           accessibilityRole="link"
           accessibilityLabel="查看权限授权引导"
           hitSlop={6}
-          onPress={() => void Linking.openSettings()}>
+          onPress={onOpenSettings}>
           <Text style={[styles.permissionsGuideText, {color: theme.text}]}>去设置开启</Text>
         </Pressable>
       </View>
@@ -48,9 +50,13 @@ function PermissionsTips() {
   )
 }
 
-function HomeListHeader() {
+type HomeListHeaderProps = {
+  hasLocationPermission: boolean
+  onOpenLocationSettings: () => void
+}
+
+function HomeListHeader({hasLocationPermission, onOpenLocationSettings}: HomeListHeaderProps) {
   const theme = useTheme()
-  const accessFineLocationAuthorize = usePermissionsStore(state => state.accessFineLocationAuthorize)
 
   return (
     <View style={styles.listHeader}>
@@ -58,7 +64,7 @@ function HomeListHeader() {
         <DiscoveryPulse/>
 
         {
-          accessFineLocationAuthorize ?
+          hasLocationPermission ?
             <>
               <Text style={[styles.discoveryText, {color: theme.textSecondary}]}>正在寻找局域网中的电脑...</Text>
               <Pressable
@@ -77,7 +83,7 @@ function HomeListHeader() {
                 <Text style={[styles.manualConnectText, {color: theme.textSecondary}]}>手动输入 IP 连接</Text>
               </Pressable>
             </> :
-            <PermissionsTips/>
+            <PermissionsTips onOpenSettings={onOpenLocationSettings}/>
         }
       </View>
     </View>
@@ -133,6 +139,11 @@ export default function FindDevice() {
   const theme = useTheme()
   const connectionSheetRef = useRef<ConnectionBottomSheetRef>(null)
   const router = useRouter()
+  const {
+    isLocationPermissionGranted,
+    openLocationPermissionSettings,
+    requestAccessFineLocationPermissionIfNeeded,
+  } = useAccessFineLocationPermission()
 
   const handleDevicePress = useCallback((device: Device) => {
     if (!device.authorized) {
@@ -160,26 +171,9 @@ export default function FindDevice() {
     <DeviceCard device={item} onPress={handleDevicePress}/>
   ), [handleDevicePress])
 
-  const [accessFineLocationAuthorize, accessFineLocationGranted, setAccessFineLocation] = usePermissionsStore(
-    useShallow((state) => ([
-      state.accessFineLocationAuthorize,
-      state.accessFineLocationGranted,
-      state.setAccessFineLocation
-    ]))
-  )
-  const {requestAccessFineLocationPermission} = useAccessFineLocationPermission()
-
-  const requestPermission = async () => {
-    if (accessFineLocationAuthorize) {
-      return
-    }
-
-    const res = await requestAccessFineLocationPermission()
-    setAccessFineLocation(res)
-  }
   useEffect(() => {
-    void requestPermission()
-  }, [])
+    void requestAccessFineLocationPermissionIfNeeded()
+  }, [requestAccessFineLocationPermissionIfNeeded])
 
   return (
     <View style={[styles.screen, {backgroundColor: theme.background}]}>
@@ -194,7 +188,12 @@ export default function FindDevice() {
         data={DEVICES}
         ItemSeparatorComponent={DeviceSeparator}
         keyExtractor={(item) => item.id}
-        ListHeaderComponent={HomeListHeader}
+        ListHeaderComponent={(
+          <HomeListHeader
+            hasLocationPermission={isLocationPermissionGranted}
+            onOpenLocationSettings={openLocationPermissionSettings}
+          />
+        )}
         renderItem={renderDevice}
         showsVerticalScrollIndicator={false}
         style={styles.list}

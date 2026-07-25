@@ -1,24 +1,26 @@
-import {create} from 'zustand/react'
 import {PermissionStatus} from 'expo-location'
+import {create} from 'zustand/react'
 
-
-interface PermissionsSate {
-  accessFineLocationAuthorize: boolean
-  accessFineLocationGranted: PermissionStatus
-  setAccessFineLocation: (obj: {
-    accessFineLocationAuthorize?: boolean,
-    accessFineLocationGranted?: PermissionStatus
-  }) => void
-
+export type ManagedPermission = {
+  resolved: boolean
+  status: PermissionStatus
 }
 
-export const usePermissionsStore = create<PermissionsSate>((setState, getState) => ({
-  accessFineLocationAuthorize: false,
-  accessFineLocationGranted: PermissionStatus.UNDETERMINED,
-  setAccessFineLocation: ({accessFineLocationAuthorize, accessFineLocationGranted}) => {
-    setState({
-      accessFineLocationAuthorize: accessFineLocationAuthorize ?? getState().accessFineLocationAuthorize,
-      accessFineLocationGranted: accessFineLocationGranted ?? getState().accessFineLocationGranted
-    })
-  }
+const INITIAL_PERMISSION: ManagedPermission = {
+  resolved: false,
+  status: PermissionStatus.UNDETERMINED,
+}
+
+type PermissionsState = {
+  camera: ManagedPermission
+  location: ManagedPermission
+  setCameraPermission: (permission: ManagedPermission) => void
+  setLocationPermission: (permission: ManagedPermission) => void
+}
+
+export const usePermissionsStore = create<PermissionsState>((set) => ({
+  camera: INITIAL_PERMISSION,
+  location: INITIAL_PERMISSION,
+  setCameraPermission: (camera) => set({camera}),
+  setLocationPermission: (location) => set({location}),
 }))
