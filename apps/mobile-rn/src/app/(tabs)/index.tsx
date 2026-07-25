@@ -10,6 +10,7 @@ import {PAGE_HORIZONTAL_PADDING} from '@/constants/layout'
 import {useTheme} from '@/hooks/use-theme'
 import type {Device} from '@/types/temp'
 
+
 const DEVICES: Device[] = [
   {id: 'work-pc', name: 'WORK-PC', ip: '192.168.1.100', type: 'desktop', authorized: true},
   {id: 'win-office-x1', name: 'WIN-OFFICE-X1', ip: '192.168.1.105', type: 'laptop'},
@@ -25,6 +26,21 @@ function HomeListHeader() {
       <View style={styles.discoverySection}>
         <DiscoveryPulse/>
         <Text style={[styles.discoveryText, {color: theme.textSecondary}]}>正在寻找局域网中的电脑...</Text>
+        <Pressable
+          accessibilityLabel="手动输入 IP 连接"
+          accessibilityRole="button"
+          style={({pressed}) => [
+            styles.manualConnectButton,
+            {backgroundColor: theme.backgroundElement},
+            pressed && styles.manualConnectButtonPressed
+          ]}>
+          <SymbolView
+            name={{ios: 'keyboard', android: 'keyboard', web: 'keyboard'}}
+            size={20}
+            tintColor={theme.textSecondary}
+          />
+          <Text style={[styles.manualConnectText, {color: theme.textSecondary}]}>手动输入 IP 连接</Text>
+        </Pressable>
       </View>
     </View>
   )
@@ -93,8 +109,8 @@ export default function FindDevice() {
         id: device.id,
         ip: device.ip,
         name: device.name,
-        type: device.type,
-      },
+        type: device.type
+      }
     })
   }, [router])
 
@@ -125,7 +141,6 @@ export default function FindDevice() {
         style={styles.list}
       />
 
-      {/* 极简调用的新组件 */}
       <ConnectionBottomSheet
         ref={connectionSheetRef}
         onConfirm={handleConfirmConnection}
@@ -148,9 +163,7 @@ const styles = StyleSheet.create({
   contentContainer: {
     paddingBottom: 28
   },
-  listHeader: {
-    marginBottom: 24
-  },
+  listHeader: {},
   headerTitle: {
     fontSize: 23,
     fontWeight: '700'
@@ -163,6 +176,23 @@ const styles = StyleSheet.create({
   discoveryText: {
     fontSize: 15,
     marginTop: 8
+  },
+  manualConnectButton: {
+    alignItems: 'center',
+    borderRadius: 22,
+    flexDirection: 'row',
+    height: 44,
+    justifyContent: 'center',
+    marginTop: 16,
+    paddingHorizontal: 20
+  },
+  manualConnectButtonPressed: {
+    opacity: 0.72
+  },
+  manualConnectText: {
+    fontSize: 16,
+    fontWeight: '600',
+    marginLeft: 9
   },
   deviceCard: {
     alignItems: 'center',
