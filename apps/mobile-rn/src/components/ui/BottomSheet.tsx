@@ -24,13 +24,14 @@ import {
   type ViewStyle
 } from 'react-native'
 
-
-const {height: SCREEN_HEIGHT} = Dimensions.get('window')
+const { height: SCREEN_HEIGHT } = Dimensions.get('window')
 
 type BottomSheetContextType = {
   translateY: Animated.Value
   dismiss: () => void
   isScrollAtTopRef: RefObject<boolean>
+  // 新增：用于标记触摸是否发生在 ScrollView 内部
+  touchFlagRef: RefObject<boolean>
 }
 
 const BottomSheetContext = createContext<BottomSheetContextType | null>(null)
@@ -63,6 +64,7 @@ const BottomSheetComponent = forwardRef<BottomSheetRef, BottomSheetProps>(
     const translateY = useRef(new Animated.Value(SCREEN_HEIGHT)).current
     const opacity = useRef(new Animated.Value(0)).current
     const isScrollAtTopRef = useRef(true)
+    const touchFlagRef = useRef(false)
 
     const dismiss = useCallback(() => {
       Animated.parallel([
@@ -103,15 +105,14 @@ const BottomSheetComponent = forwardRef<BottomSheetRef, BottomSheetProps>(
       ]).start()
     }, [opacity, translateY])
 
-    useImperativeHandle(ref, () => ({dismiss, present}), [dismiss, present])
+    useImperativeHandle(ref, () => ({ dismiss, present }), [dismiss, present])
 
-    // 外层 Pan 只负责「非 ScrollView 区域」（顶部 padding、空白等）
+    // 外层 Pan 回归正常配置：绝不主动抢首个事件，只靠 Move 拦截，保护 ScrollView
     const panResponder = useRef(
       PanResponder.create({
         onStartShouldSetPanResponder: () => false,
         onMoveShouldSetPanResponder: (_, gs) => {
-          const isDown =
-            gs.dy > 5 && Math.abs(gs.dy) > Math.abs(gs.dx)
+          const isDown = gs.dy > 5 && Math.abs(gs.dy) > Math.abs(gs.dx)
           return isDown && isScrollAtTopRef.current
         },
         onPanResponderMove: (_, gs) => {
@@ -146,13 +147,13 @@ const BottomSheetComponent = forwardRef<BottomSheetRef, BottomSheetProps>(
         transparent
         visible={visible}
       >
-        <Animated.View style={[styles.backdrop, {opacity}]}>
-          <Pressable onPress={dismiss} style={StyleSheet.absoluteFill}/>
+        <Animated.View style={[styles.backdrop, { opacity }]}>
+          <Pressable onPress={dismiss} style={StyleSheet.absoluteFill} />
         </Animated.View>
 
         <View pointerEvents="box-none" style={styles.sheetContainer}>
           <BottomSheetContext.Provider
-            value={{translateY, dismiss, isScrollAtTopRef}}
+            value={{ translateY, dismiss, isScrollAtTopRef, touchFlagRef }}
           >
             <Animated.View
               {...panResponder.panHandlers}
@@ -161,12 +162,28 @@ const BottomSheetComponent = forwardRef<BottomSheetRef, BottomSheetProps>(
                 {
                   backgroundColor,
                   maxHeight,
-                  transform: [{translateY}]
+                  transform: [{ translateY }]
                 },
                 contentStyle
               ]}
             >
-              <View style={styles.contentContainer}>{children}</View>
+              <View
+                style={styles.contentContainer}
+                // 【核心：智能识别】
+                // 1. 在触摸刚按下的捕获阶段（最先执行），重置 Flag
+                onStartShouldSetResponderCapture={() => {
+                  touchFlagRef.current = false
+                  return false
+                }}
+                // 2. 在事件冒泡阶段（最后执行），决定是否兜底
+                onStartShouldSetResponder={() => {
+                  // 如果为 true，说明子树中的 ScrollView 已经被摸到了，我们放弃接管，让它滚！
+                  // 如果为 false，说明摸到的是纯文本/空白处，我们果断接管，防止手势死亡！
+                  return !touchFlagRef.current
+                }}
+              >
+                {children}
+              </View>
             </Animated.View>
           </BottomSheetContext.Provider>
         </View>
@@ -182,7 +199,6 @@ const BottomSheetScrollView = forwardRef<ScrollView, ScrollViewProps>(
     const startY = useRef(0)
     const isDraggingSheet = useRef(false)
     const currentOffsetY = useRef(0)
-    // 本次触摸开始时是否已经在顶部
     const startedAtTop = useRef(false)
 
     React.useImperativeHandle(ref, () => scrollRef.current as any)
@@ -203,11 +219,9 @@ const BottomSheetScrollView = forwardRef<ScrollView, ScrollViewProps>(
       startY.current = e.nativeEvent.pageY
       isDraggingSheet.current = false
 
-      // 关键：触摸开始时如果已经在顶部，先禁用滚动
-      // 这样快速下拉也能第一时间被我们接管
       startedAtTop.current = currentOffsetY.current <= 1
       if (startedAtTop.current) {
-        scrollRef.current?.setNativeProps({scrollEnabled: false})
+        scrollRef.current?.setNativeProps({ scrollEnabled: false })
         if (context) context.isScrollAtTopRef.current = true
       }
 
@@ -223,17 +237,14 @@ const BottomSheetScrollView = forwardRef<ScrollView, ScrollViewProps>(
       const dy = e.nativeEvent.pageY - startY.current
 
       if (isDraggingSheet.current) {
-        // 已经在拖 Sheet，只允许向下
         context.translateY.setValue(Math.max(0, dy))
       } else if (startedAtTop.current) {
         if (dy > 0) {
-          // 确认是向下 → 进入拖 Sheet 模式
           isDraggingSheet.current = true
           context.translateY.setValue(dy)
         } else if (dy < -2) {
-          // 用户其实想向上滚 → 立刻恢复滚动，让 ScrollView 接管
           startedAtTop.current = false
-          scrollRef.current?.setNativeProps({scrollEnabled: true})
+          scrollRef.current?.setNativeProps({ scrollEnabled: true })
         }
       }
 
@@ -241,8 +252,7 @@ const BottomSheetScrollView = forwardRef<ScrollView, ScrollViewProps>(
     }
 
     const endDrag = (dy: number) => {
-      // 无论是否拖过 Sheet，都恢复滚动
-      scrollRef.current?.setNativeProps({scrollEnabled: true})
+      scrollRef.current?.setNativeProps({ scrollEnabled: true })
       startedAtTop.current = false
 
       if (!isDraggingSheet.current || !context) return
@@ -271,20 +281,30 @@ const BottomSheetScrollView = forwardRef<ScrollView, ScrollViewProps>(
     }
 
     return (
-      <ScrollView
-        ref={scrollRef}
-        bounces={false}
-        nestedScrollEnabled
-        scrollEventThrottle={16}
-        showsVerticalScrollIndicator={false}
-        {...props}
-        onScroll={handleScroll}
-        onTouchStart={onTouchStart}
-        onTouchMove={onTouchMove}
-        onTouchEnd={onTouchEnd}
-        onTouchCancel={onTouchCancel}
-        style={[styles.scrollView, props.style]}
-      />
+      <View
+        style={styles.scrollViewWrapper}
+        // 【核心：智能反馈】
+        // 当触摸进入 ScrollView 的地盘时，拦截捕获阶段并打上标记告诉父组件：“别抢！这是我的！”
+        onStartShouldSetResponderCapture={() => {
+          if (context) context.touchFlagRef.current = true
+          return false
+        }}
+      >
+        <ScrollView
+          ref={scrollRef}
+          bounces={false}
+          nestedScrollEnabled
+          scrollEventThrottle={16}
+          showsVerticalScrollIndicator={false}
+          {...props}
+          onScroll={handleScroll}
+          onTouchStart={onTouchStart}
+          onTouchMove={onTouchMove}
+          onTouchEnd={onTouchEnd}
+          onTouchCancel={onTouchCancel}
+          style={[styles.innerScrollView, props.style]}
+        />
+      </View>
     )
   }
 )
@@ -307,13 +327,16 @@ const styles = StyleSheet.create({
   sheetContent: {
     borderTopLeftRadius: 18,
     borderTopRightRadius: 18,
-    paddingBottom: 34,
-    paddingTop: 22
   },
   contentContainer: {
+    flexShrink: 1,
+    paddingBottom: 34,
+    paddingTop: 22, // 维持在这里，确保顶部空白也能被父容器兜底
+  },
+  scrollViewWrapper: {
     flexShrink: 1
   },
-  scrollView: {
+  innerScrollView: {
     flexShrink: 1
   }
 })
