@@ -192,7 +192,7 @@ const TransmissionRecordFilterBottomSheet = forwardRef<
           accessibilityRole="button"
           onPress={handleApply}
           style={({pressed}) => [styles.applyButton, pressed && styles.pressed]}>
-          <Text style={styles.applyText}>应用筛选</Text>
+          <Text style={styles.applyText}>应用</Text>
         </Pressable>
         <Pressable
           accessibilityRole="button"
