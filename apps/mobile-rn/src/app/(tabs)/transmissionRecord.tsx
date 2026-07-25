@@ -311,6 +311,7 @@ export default function TransmissionRecord() {
   const [activeTab, setActiveTab] = useState(0)
   const [filter, setFilter] = useState<TransmissionRecordFilter>({fileTypes: [], statuses: []})
   const [query, setQuery] = useState('')
+  const hasActiveFilter = filter.fileTypes.length > 0 || filter.statuses.length > 0
 
   // 优化：统一在顶层处理字符串格式化
   const normalizedQuery = useMemo(() => query.trim().toLocaleLowerCase(), [query])
@@ -372,16 +373,17 @@ export default function TransmissionRecord() {
         <Pressable
           accessibilityLabel={TEXTS.filterAccessibility}
           accessibilityRole="button"
+          accessibilityState={{selected: hasActiveFilter}}
           onPress={handleOpenFilter}
           style={({pressed}) => [
             styles.filterButton,
-            {backgroundColor: theme.background},
+            {backgroundColor: hasActiveFilter ? '#050505' : theme.background},
             pressed && styles.pressed
           ]}>
           <SymbolView
             name={ICONS.filter}
             size={22}
-            tintColor={theme.textSecondary}
+            tintColor={hasActiveFilter ? '#FFFFFF' : theme.textSecondary}
           />
         </Pressable>
       </View>
