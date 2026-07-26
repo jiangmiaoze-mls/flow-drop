@@ -1,7 +1,7 @@
 import * as ExpoDevice from 'expo-device'
 import {useRouter} from 'expo-router'
 import {SymbolView} from 'expo-symbols'
-import {useCallback, useEffect, useRef} from 'react'
+import {useCallback, useEffect, useRef, useState} from 'react'
 import {FlatList, Platform, Pressable, StyleSheet, Text, View} from 'react-native'
 
 import ConnectionBottomSheet, {type ConnectionBottomSheetRef} from '@/components/ConnectionBottomSheet'
@@ -10,16 +10,23 @@ import {Header} from '@/components/Header'
 import {PAGE_HORIZONTAL_PADDING} from '@/constants/layout'
 import {useTheme} from '@/hooks/use-theme'
 import {DiscoveryService} from '@/network/discoveryService'
-import type {Device} from '@flowdrop/types'
+import {getWifiIPv4BroadcastTargetAsync} from '@flowdrop/network/mobile'
+import type {Device, DiscoveredDevice} from '@flowdrop/types'
 import {useAccessFineLocationPermission} from '@/hooks/usePermissions'
 
 
-const DEVICES: Device[] = [
-  {id: 'work-pc', name: 'WORK-PC', ip: '192.168.1.100', type: 'desktop', authorized: true},
-  {id: 'win-office-x1', name: 'WIN-OFFICE-X1', ip: '192.168.1.105', type: 'laptop'},
-  {id: 'mac-studio-design', name: 'MAC-STUDIO-DESIGN', ip: '192.168.1.112', type: 'laptop'},
-  {id: 'mac-1-design', name: 'MAC-STUDIO-DESIGN', ip: '192.168.1.112', type: 'laptop'}
-]
+function toDevice(discoveredDevice: DiscoveredDevice): Device {
+  return {
+    id: discoveredDevice.deviceId,
+    ip: discoveredDevice.address,
+    name: discoveredDevice.deviceName,
+    type: 'desktop'
+  }
+}
+
+function sortDevices(devices: Device[]): Device[] {
+  return [...devices].sort((left, right) => left.name.localeCompare(right.name))
+}
 
 type PermissionsTipsProps = {
   onOpenSettings: () => void
@@ -141,6 +148,7 @@ export default function FindDevice() {
   const theme = useTheme()
   const connectionSheetRef = useRef<ConnectionBottomSheetRef>(null)
   const discoveryServiceRef = useRef<DiscoveryService | null>(null)
+  const [devices, setDevices] = useState<Device[]>([])
   const router = useRouter()
   const {
     isLocationPermissionGranted,
@@ -182,23 +190,70 @@ export default function FindDevice() {
   }, [requestAccessFineLocationPermissionIfNeeded])
 
   useEffect(() => {
-    if (!hasDiscoveryPermission) return
+    if (!hasDiscoveryPermission) {
+      setDevices([])
+      return
+    }
 
-    const deviceName = ExpoDevice.deviceName?.trim() || ExpoDevice.modelName?.trim() || 'FlowDrop Mobile'
-    const discoveryService = new DiscoveryService(deviceName)
-    discoveryServiceRef.current = discoveryService
+    let discoveryService: DiscoveryService | null = null
+    let unsubscribe: () => void = () => undefined
+    let disposed = false
 
-    void discoveryService.start().catch((error: unknown) => {
-      if (discoveryServiceRef.current === discoveryService) {
-        console.warn('Failed to start local network discovery.', error)
+    const startDiscovery = async () => {
+      const deviceName = ExpoDevice.deviceName?.trim() || ExpoDevice.modelName?.trim() || 'FlowDrop Mobile'
+      let broadcastAddress: string | undefined
+
+      if (Platform.OS === 'android') {
+        try {
+          broadcastAddress = (await getWifiIPv4BroadcastTargetAsync())?.broadcastAddress
+        } catch (error) {
+          console.warn('Unable to determine the Wi-Fi directed broadcast address.', error)
+        }
       }
+      if (disposed) return
+
+      const service = new DiscoveryService(deviceName, {broadcastAddress})
+      discoveryService = service
+      discoveryServiceRef.current = service
+      unsubscribe = service.subscribe((event) => {
+        if (event.type === 'error') {
+          console.warn('Local network discovery failed.', event.error)
+          return
+        }
+
+        if (event.type === 'deviceLost') {
+          setDevices((currentDevices) => currentDevices.filter((device) => device.id !== event.device.deviceId))
+          return
+        }
+
+        const nextDevice = toDevice(event.device)
+        setDevices((currentDevices) => {
+          const deviceIndex = currentDevices.findIndex((device) => device.id === nextDevice.id)
+          if (deviceIndex === -1) return sortDevices([...currentDevices, nextDevice])
+
+          const nextDevices = [...currentDevices]
+          nextDevices[deviceIndex] = nextDevice
+          return sortDevices(nextDevices)
+        })
+      })
+
+      await service.start()
+      if (discoveryServiceRef.current === service) {
+        setDevices(sortDevices(service.getDiscoveredDevices().map(toDevice)))
+      }
+    }
+
+    void startDiscovery().catch((error: unknown) => {
+      if (!disposed) console.warn('Failed to start local network discovery.', error)
     })
 
     return () => {
+      disposed = true
+      unsubscribe()
       if (discoveryServiceRef.current === discoveryService) {
         discoveryServiceRef.current = null
       }
-      discoveryService.stop()
+      discoveryService?.stop()
     }
   }, [hasDiscoveryPermission])
 
@@ -212,7 +267,7 @@ export default function FindDevice() {
 
       <FlatList
         contentContainerStyle={styles.contentContainer}
-        data={DEVICES}
+        data={devices}
         ItemSeparatorComponent={DeviceSeparator}
         keyExtractor={(item) => item.id}
         ListHeaderComponent={(
@@ -221,6 +276,7 @@ export default function FindDevice() {
             onOpenLocationSettings={openLocationPermissionSettings}
           />
         )}
+        ListEmptyComponent={hasDiscoveryPermission ? <EmptyDeviceList/> : null}
         renderItem={renderDevice}
         showsVerticalScrollIndicator={false}
         style={styles.list}
@@ -236,6 +292,14 @@ export default function FindDevice() {
 
 function DeviceSeparator() {
   return <View style={styles.separator}/>
+}
+
+function EmptyDeviceList() {
+  const theme = useTheme()
+
+  return (
+    <Text style={[styles.emptyDeviceListText, {color: theme.textSecondary}]}>暂未发现可连接的设备</Text>
+  )
 }
 
 const styles = StyleSheet.create({
@@ -379,5 +443,11 @@ const styles = StyleSheet.create({
   },
   separator: {
     height: 14
+  },
+  emptyDeviceListText: {
+    fontSize: 15,
+    paddingHorizontal: PAGE_HORIZONTAL_PADDING,
+    paddingTop: 16,
+    textAlign: 'center'
   }
 })

@@ -24,6 +24,7 @@
     "baseUrl": ".",
     "paths": {
       "@flowdrop/config": ["../../packages/config"],
+      "@flowdrop/network": ["../../packages/network"],
       "@flowdrop/types": ["../../packages/types"]
     },
     "moduleResolution": "node",

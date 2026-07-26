@@ -12,6 +12,12 @@
       "@flowdrop/config": [
         "../../packages/config"
       ],
+      "@flowdrop/network": [
+        "../../packages/network"
+      ],
+      "@flowdrop/network/*": [
+        "../../packages/network/*"
+      ],
       "@flowdrop/types": [
         "../../packages/types"
       ]

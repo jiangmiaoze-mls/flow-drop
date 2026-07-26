@@ -1,0 +1,19 @@
+{
+  "name": "@flowdrop/network",
+  "version": "1.0.0",
+  "private": true,
+  "main": "./index.js",
+  "types": "./index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "require": "./index.js",
+      "default": "./index.js"
+    },
+    "./mobile": {
+      "types": "./mobile.d.ts",
+      "require": "./mobile.js",
+      "default": "./mobile.js"
+    }
+  }
+}

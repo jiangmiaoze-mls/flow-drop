@@ -3,11 +3,11 @@ import * as Crypto from 'expo-crypto'
 import * as SecureStore from 'expo-secure-store'
 import {DISCOVERY_BROADCAST_ADDRESS, DISCOVERY_PORT} from '@flowdrop/config'
 import type {
+  DiscoveredDevice,
   DiscoveryAnnouncement,
   DiscoveryEvent,
   DiscoveryEventListener,
-  DiscoveryServiceOptions,
-  DiscoveredDevice,
+  DiscoveryServiceOptions
 } from '@flowdrop/types'
 import dgram, {type RemoteInfo, type Socket} from 'react-native-udp'
 import {Platform} from 'react-native'
@@ -29,7 +29,7 @@ export type {
   DiscoveryEvent,
   DiscoveryEventListener,
   DiscoveryServiceOptions,
-  DiscoveredDevice,
+  DiscoveredDevice
 } from '@flowdrop/types'
 
 /**

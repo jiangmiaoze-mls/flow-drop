@@ -19,14 +19,16 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "@flowdrop/config": "workspace:*",
-    "@flowdrop/types": "workspace:*",
     "@fastify/autoload": "^6.0.0",
     "@fastify/sensible": "^6.0.0",
     "@fastify/static": "^10.1.2",
+    "@flowdrop/config": "workspace:*",
+    "@flowdrop/network": "workspace:*",
+    "@flowdrop/types": "workspace:*",
     "fastify": "^5.0.0",
     "fastify-cli": "^8.0.0",
-    "fastify-plugin": "^5.0.0"
+    "fastify-plugin": "^5.0.0",
+    "node-machine-id": "^1.1.12"
   },
   "devDependencies": {
     "@types/node": "^25.0.3",

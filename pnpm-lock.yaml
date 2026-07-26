@@ -66,6 +66,9 @@ importers:
       '@flowdrop/config':
         specifier: workspace:*
         version: link:../../packages/config
+      '@flowdrop/network':
+        specifier: workspace:*
+        version: link:../../packages/network
       '@flowdrop/types':
         specifier: workspace:*
         version: link:../../packages/types
@@ -193,6 +196,9 @@ importers:
       '@flowdrop/config':
         specifier: workspace:*
         version: link:../../packages/config
+      '@flowdrop/network':
+        specifier: workspace:*
+        version: link:../../packages/network
       '@flowdrop/types':
         specifier: workspace:*
         version: link:../../packages/types
@@ -205,6 +211,9 @@ importers:
       fastify-plugin:
         specifier: ^5.0.0
         version: 5.1.0
+      node-machine-id:
+        specifier: ^1.1.12
+        version: 1.1.12
     devDependencies:
       '@types/node':
         specifier: ^25.0.3
@@ -226,6 +235,8 @@ importers:
         version: 5.9.3
 
   packages/config: {}
+
+  packages/network: {}
 
   packages/types: {}
 
@@ -3162,6 +3173,9 @@ packages:
 
   node-int64@0.4.0:
     resolution: {integrity: sha512-O5lz91xSOeoXP6DulyHfllpq+Eg00MWitZIbtPfoSEvqIHdl5gfcY6hYzDWnj0qD5tz52PI08u9qUvSVeUBeHw==}
+
+  node-machine-id@1.1.12:
+    resolution: {integrity: sha512-QNABxbrPa3qEIfrE6GOJ7BYIuignnJw7iQ2YPbc3Nla1HzRJjXzZOiikfF8m7eAMfichLt3M4VgLOetqgDmgGQ==}
 
   node-releases@2.0.51:
     resolution: {integrity: sha512-wRNIrw4DmVLKQlbgOMdkMx27Wrpzes2hh5Jtbi2bjPd+4wJstWIqP5A+lscnqbm0xxmT5Bpg8Lec5ItEBwx6BQ==}
@@ -7421,6 +7435,8 @@ snapshots:
   node-forge@1.4.0: {}
 
   node-int64@0.4.0: {}
+
+  node-machine-id@1.1.12: {}
 
   node-releases@2.0.51: {}
 

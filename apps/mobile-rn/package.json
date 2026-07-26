@@ -15,6 +15,7 @@
   },
   "dependencies": {
     "@flowdrop/config": "workspace:*",
+    "@flowdrop/network": "workspace:*",
     "@flowdrop/types": "workspace:*",
     "@expo/ui": "~57.0.7",
     "@gorhom/bottom-sheet": "^5.2.14",
