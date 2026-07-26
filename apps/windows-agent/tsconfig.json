@@ -21,6 +21,10 @@
     "noFallthroughCasesInSwitch": true,
 
     /* 模块解析 */
+    "baseUrl": ".",
+    "paths": {
+      "@flowdrop/config": ["../../packages/config"]
+    },
     "moduleResolution": "node",
     "esModuleInterop": true,
     "resolveJsonModule": true,

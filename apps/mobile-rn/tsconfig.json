@@ -8,6 +8,9 @@
       ],
       "@/assets/*": [
         "./assets/*"
+      ],
+      "@flowdrop/config": [
+        "../../packages/config"
       ]
     }
   },

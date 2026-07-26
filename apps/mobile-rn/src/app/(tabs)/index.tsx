@@ -142,8 +142,9 @@ export default function FindDevice() {
   const {
     isLocationPermissionGranted,
     openLocationPermissionSettings,
-    requestAccessFineLocationPermissionIfNeeded,
+    requestAccessFineLocationPermissionIfNeeded
   } = useAccessFineLocationPermission()
+  // const discoveryService = new DiscoveryService()
 
   const handleDevicePress = useCallback((device: Device) => {
     if (!device.authorized) {
