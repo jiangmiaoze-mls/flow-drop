@@ -6,8 +6,6 @@ import dgram, {type RemoteInfo, type Socket} from 'react-native-udp'
 import {Platform} from 'react-native'
 
 
-export {DISCOVERY_BROADCAST_ADDRESS, DISCOVERY_PORT} from '@flowdrop/config'
-
 const PROTOCOL = 'flowdrop-discovery'
 const PROTOCOL_VERSION = 1
 const IOS_DEVICE_ID_KEY = 'flowdrop.device-id.v1'
@@ -36,10 +34,10 @@ export type DiscoveredDevice = {
 }
 
 export type DiscoveryEvent =
-  | {type: 'deviceFound'; device: DiscoveredDevice}
-  | {type: 'deviceUpdated'; device: DiscoveredDevice}
-  | {type: 'deviceLost'; device: DiscoveredDevice}
-  | {type: 'error'; error: Error}
+  | { type: 'deviceFound'; device: DiscoveredDevice }
+  | { type: 'deviceUpdated'; device: DiscoveredDevice }
+  | { type: 'deviceLost'; device: DiscoveredDevice }
+  | { type: 'error'; error: Error }
 
 export type DiscoveryEventListener = (event: DiscoveryEvent) => void
 
@@ -75,7 +73,7 @@ export class DiscoveryService {
 
   constructor(
     private readonly deviceName: string,
-    options: DiscoveryServiceOptions = {},
+    options: DiscoveryServiceOptions = {}
   ) {
     if (!isValidDeviceName(deviceName)) {
       throw new Error(`deviceName must be a non-empty string up to ${MAX_DEVICE_NAME_LENGTH} characters.`)
@@ -149,7 +147,7 @@ export class DiscoveryService {
       deviceName: this.deviceName,
       protocol: PROTOCOL,
       type: 'announce',
-      version: PROTOCOL_VERSION,
+      version: PROTOCOL_VERSION
     }
 
     try {
@@ -162,7 +160,7 @@ export class DiscoveryService {
         this.broadcastAddress,
         (error) => {
           if (error) this.emit({type: 'error', error})
-        },
+        }
       )
     } catch (error) {
       this.emit({type: 'error', error: toError(error)})
@@ -244,7 +242,10 @@ export class DiscoveryService {
     }
   }
 
-  private handleMessage = (message: {length: number; toString: (encoding?: string) => string}, remote: RemoteInfo) => {
+  private handleMessage = (message: {
+    length: number;
+    toString: (encoding?: string) => string
+  }, remote: RemoteInfo) => {
     if (message.length > MAX_MESSAGE_BYTES) return
 
     const announcement = parseAnnouncement(message)
@@ -255,7 +256,7 @@ export class DiscoveryService {
       deviceId: announcement.deviceId,
       deviceName: announcement.deviceName,
       lastSeenAt: Date.now(),
-      port: remote.port,
+      port: remote.port
     }
     const previous = this.devices.get(device.deviceId)
     this.devices.set(device.deviceId, device)
@@ -322,7 +323,7 @@ async function getOrCreateIosDeviceId(): Promise<string> {
 
     const generatedId = Crypto.randomUUID()
     await SecureStore.setItemAsync(IOS_DEVICE_ID_KEY, generatedId, {
-      keychainAccessible: SecureStore.AFTER_FIRST_UNLOCK_THIS_DEVICE_ONLY,
+      keychainAccessible: SecureStore.AFTER_FIRST_UNLOCK_THIS_DEVICE_ONLY
     })
     return generatedId
   })()
@@ -336,7 +337,7 @@ async function getOrCreateIosDeviceId(): Promise<string> {
   }
 }
 
-function parseAnnouncement(message: {toString: (encoding?: string) => string}): DiscoveryAnnouncement | null {
+function parseAnnouncement(message: { toString: (encoding?: string) => string }): DiscoveryAnnouncement | null {
   try {
     const payload: unknown = JSON.parse(message.toString('utf8'))
     return isDiscoveryAnnouncement(payload) ? payload : null
@@ -362,7 +363,7 @@ function validateOptions(
   announceIntervalMs: number,
   deviceTtlMs: number,
   port: number,
-  broadcastAddress: string,
+  broadcastAddress: string
 ) {
   if (!Number.isFinite(announceIntervalMs) || announceIntervalMs <= 0) {
     throw new Error('announceIntervalMs must be greater than zero.')
