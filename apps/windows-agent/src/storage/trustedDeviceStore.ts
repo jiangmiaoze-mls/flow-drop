@@ -1,3 +1,4 @@
+import {randomBytes} from 'node:crypto'
 import {mkdirSync} from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -36,6 +37,11 @@ export class TrustedDeviceStore {
         paired_at INTEGER NOT NULL,
         receive_enabled INTEGER NOT NULL DEFAULT 1,
         updated_at INTEGER NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS transfer_credentials (
+        device_id TEXT PRIMARY KEY,
+        secret TEXT NOT NULL,
+        updated_at INTEGER NOT NULL
       )
     `)
     const columns = this.database.prepare('PRAGMA table_info(trusted_devices)').all() as Array<{name: string}>
@@ -50,6 +56,7 @@ export class TrustedDeviceStore {
 
   delete(deviceId: string) {
     this.database.prepare('DELETE FROM trusted_devices WHERE device_id = ?').run(deviceId)
+    this.database.prepare('DELETE FROM transfer_credentials WHERE device_id = ?').run(deviceId)
   }
 
   get(deviceId: string): TrustedDevice | null {
@@ -72,6 +79,26 @@ export class TrustedDeviceStore {
       .prepare('UPDATE trusted_devices SET receive_enabled = ?, updated_at = ? WHERE device_id = ?')
       .run(receiveEnabled ? 1 : 0, now, deviceId)
     return this.get(deviceId)
+  }
+
+  createTransferSecret(deviceId: string): string {
+    const secret = randomBytes(32).toString('hex')
+    this.setTransferSecret(deviceId, secret)
+    return secret
+  }
+
+  setTransferSecret(deviceId: string, secret: string) {
+    if (!/^[a-f0-9]{64}$/i.test(secret)) throw new Error('Invalid transfer credential.')
+    this.database.prepare(`
+      INSERT INTO transfer_credentials (device_id, secret, updated_at) VALUES (?, ?, ?)
+      ON CONFLICT(device_id) DO UPDATE SET secret = excluded.secret, updated_at = excluded.updated_at
+    `).run(deviceId, secret, Date.now())
+  }
+
+  getTransferSecret(deviceId: string): string | null {
+    const row = this.database.prepare('SELECT secret FROM transfer_credentials WHERE device_id = ?')
+      .get(deviceId) as {secret: string} | undefined
+    return row?.secret ?? null
   }
 
   upsert(device: TrustedDevice): TrustedDevice {

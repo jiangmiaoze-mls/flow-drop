@@ -1,10 +1,12 @@
 import {SymbolView, type SymbolViewProps} from 'expo-symbols'
 import {useCallback, useMemo, useRef, useState} from 'react'
+import {useFocusEffect} from 'expo-router'
 import {
   Animated,
   type NativeScrollEvent,
   type NativeSyntheticEvent,
   Pressable,
+  RefreshControl,
   ScrollView,
   type ScrollView as ScrollViewType,
   SectionList,
@@ -25,6 +27,8 @@ import TransmissionRecordFilterBottomSheet, {
 } from '@/components/TransmissionRecordFilterBottomSheet'
 import {PAGE_HORIZONTAL_PADDING} from '@/constants/layout'
 import {useTheme} from '@/hooks/use-theme'
+import {listAllOutgoingTransfers, type OutgoingTransferItem} from '@/storage/outgoingTransferRepository'
+import {listTrustedDevices} from '@/storage/trustedDeviceRepository'
 import type {
   TransferDirection,
   TransferRecord,
@@ -43,18 +47,13 @@ type RecordSection = {
   title: string
 }
 
-type DeviceGroup = {
-  deviceName: string
-  records: TransferRecord[]
-}
-
 const TABS = ['全部记录', '按设备分组'] as const
 
 const TEXTS = {
   searchPlaceholder: '搜索文件或文本...',
   searchAccessibility: '搜索文件或文本',
   filterAccessibility: '筛选传输记录',
-  emptyState: '暂无匹配记录'
+  emptyState: '暂无真实传输记录'
 } as const
 
 const ICONS: Record<string, SymbolViewProps['name']> = {
@@ -68,17 +67,77 @@ const STATUS_CONFIG: Record<RecordStatus, {
   dotColor: string;
   bgVariant: string | null
 }> = {
-  success: {
+  cancelled: {
+    text: '已取消',
+    textColor: '#68707A',
+    dotColor: '#8B949E',
+    bgVariant: null
+  },
+  completed: {
     text: '成功',
     textColor: '#27B85D',
     dotColor: '#2DC866',
     bgVariant: null
   },
-  interrupted: {
-    text: '中断',
+  completing: {
+    text: '正在完成',
+    textColor: '#B96B00',
+    dotColor: '#E88B00',
+    bgVariant: '#FFF0D2'
+  },
+  draft: {
+    text: '草稿',
+    textColor: '#68707A',
+    dotColor: '#8B949E',
+    bgVariant: null
+  },
+  failed: {
+    text: '失败',
     textColor: '#E5484D',
     dotColor: '#F04449',
     bgVariant: '#FFD8D5'
+  },
+  negotiating: {
+    text: '正在协商',
+    textColor: '#3468C0',
+    dotColor: '#4C82D9',
+    bgVariant: '#DCEBFF'
+  },
+  paused: {
+    text: '已暂停',
+    textColor: '#68707A',
+    dotColor: '#8B949E',
+    bgVariant: null
+  },
+  preparing: {
+    text: '正在准备',
+    textColor: '#3468C0',
+    dotColor: '#4C82D9',
+    bgVariant: '#DCEBFF'
+  },
+  queued: {
+    text: '等待发送',
+    textColor: '#B96B00',
+    dotColor: '#E88B00',
+    bgVariant: '#FFF0D2'
+  },
+  transferring: {
+    text: '传输中',
+    textColor: '#3468C0',
+    dotColor: '#4C82D9',
+    bgVariant: '#DCEBFF'
+  },
+  verifying: {
+    text: '正在校验',
+    textColor: '#3468C0',
+    dotColor: '#4C82D9',
+    bgVariant: '#DCEBFF'
+  },
+  waiting_for_peer: {
+    text: '等待对端',
+    textColor: '#B96B00',
+    dotColor: '#E88B00',
+    bgVariant: '#FFF0D2'
   }
 }
 
@@ -95,72 +154,6 @@ const TRANSFER_DIRECTION_CONFIG: Record<TransferDirection, {
     label: '接收'
   }
 }
-
-const ALL_RECORD_SECTIONS: RecordSection[] = [
-  {
-    title: '今天',
-    data: [
-      {detail: '14.2 MB', direction: 'send', fileType: 'document', id: 'q3-report', name: 'Q3_Financial_Report.pdf', status: 'success', time: '10:42'},
-      {detail: '剪贴板', direction: 'receive', fileType: 'text', id: 'release-note', name: '今晚 20:00 发布新版客户端', status: 'success', time: '09:36'},
-      {
-        detail: '剪贴板',
-        direction: 'receive',
-        fileType: 'link',
-        id: 'design-system-link',
-        name: 'https://designsystem.flo...',
-        status: 'success',
-        time: '09:15'
-      },
-      {detail: '4.1 MB', direction: 'receive', fileType: 'image', id: 'img-8921', name: 'IMG_8921.HEIC', status: 'interrupted', time: '08:30'},
-      {detail: '86.4 MB', direction: 'send', fileType: 'video', id: 'product-demo', name: 'Product_Demo.mp4', status: 'success', time: '08:12'}
-    ]
-  },
-  {
-    title: '昨天',
-    data: [
-      {detail: '1.2 GB', direction: 'receive', fileType: 'document', id: 'assets-zip', name: 'Assets_V2_Final.zip', status: 'success', time: '16:45'},
-      {detail: '剪贴板', direction: 'send', fileType: 'text', id: 'handoff-note', name: '交接说明已同步到对方设备', status: 'interrupted', time: '14:28'},
-      {detail: '41.7 MB', direction: 'send', fileType: 'video', id: 'launch-video', name: 'Launch_Recap.mov', status: 'success', time: '10:06'}
-    ]
-  }
-]
-
-const DEVICE_GROUPS: DeviceGroup[] = [
-  {
-    deviceName: 'WIN-OFFICE-X1',
-    records: [
-      {detail: '14.2 MB', id: 'device-q3-report', name: 'Q3_Financial_Report.pdf', status: 'success', time: '10:42'},
-      {detail: '14.2 MB', id: 'device-1-report', name: 'Q3_Financial_Report.pdf', status: 'success', time: '10:42'},
-      {detail: '14.2 MB', id: 'device-2-report', name: 'Q3_Financial_Report.pdf', status: 'success', time: '10:42'},
-      {detail: '14.2 MB', id: 'device-3-report', name: 'Q3_Financial_Report.pdf', status: 'success', time: '10:42'},
-      {detail: '14.2 MB', id: 'device-4-report', name: 'Q3_Financial_Report.pdf', status: 'success', time: '10:42'},
-      {detail: '14.2 MB', id: 'device-q3-rep11ort', name: 'Q3_Financial_Report.pdf', status: 'success', time: '10:42'},
-      {detail: '14.2 MB', id: 'device-q3-r11eport', name: 'Q3_Financial_Report.pdf', status: 'success', time: '10:42'},
-      {detail: '14.2 MB', id: 'devic11e-q3-report', name: 'Q3_Financial_Report.pdf', status: 'success', time: '10:42'},
-      {detail: '86.4 MB', direction: 'send', fileType: 'video', id: 'device-product-demo', name: 'Product_Demo.mp4', status: 'success', time: '09:47'},
-      {detail: '剪贴板', direction: 'receive', fileType: 'text', id: 'device-handoff-note', name: '请在下午三点前确认素材', status: 'interrupted', time: '09:32'},
-      {detail: '6.8 MB', direction: 'send', fileType: 'image', id: 'device-cover-image', name: 'Cover_Artwork.png', status: 'success', time: '09:21'},
-      {
-        detail: '剪贴板',
-        fileType: 'link',
-        id: 'device-design-system-link',
-        name: 'https://designsystem.flo...',
-        status: 'success',
-        time: '09:15'
-      }
-    ]
-  },
-  {
-    deviceName: 'MAC-STUDIO-DESIGN',
-    records: [
-      {detail: '4.1 MB', direction: 'receive', fileType: 'image', id: 'device-img-8921', name: 'IMG_8921.HEIC', status: 'interrupted', time: '08:30'},
-      {detail: '1.2 GB', direction: 'receive', fileType: 'document', id: 'device-assets-zip', name: 'Assets_V2_Final.zip', status: 'success', time: '16:45'},
-      {detail: '剪贴板', direction: 'send', fileType: 'link', id: 'device-brief-link', name: 'https://flowdrop.design/brief', status: 'success', time: '15:18'},
-      {detail: '剪贴板', direction: 'receive', fileType: 'text', id: 'device-copy-note', name: '品牌图形已按深色模式调整', status: 'success', time: '12:06'},
-      {detail: '41.7 MB', direction: 'send', fileType: 'video', id: 'device-launch-video', name: 'Launch_Recap.mov', status: 'interrupted', time: '11:20'}
-    ]
-  }
-]
 
 function matchesNormalizedQuery(record: TransferRecord, normalizedQuery: string) {
   if (!normalizedQuery) return true
@@ -192,14 +185,89 @@ function getRecordFileType(record: TransferRecord): RecordFileType {
 }
 
 function getTransferDirection(record: TransferRecord): TransferDirection {
-  return record.direction ?? (record.id.startsWith('device-') ? 'receive' : 'send')
+  return record.direction ?? 'send'
+}
+
+function listTransferRecords(): TransferRecord[] {
+  const deviceNames = new Map(listTrustedDevices().map((device) => [device.deviceId, device.deviceName]))
+  return listAllOutgoingTransfers().flatMap((task) => task.items.map((item) => ({
+    detail: getItemDetail(item),
+    direction: 'send' as const,
+    fileType: getItemFileType(item),
+    id: `${task.transferId}:${item.itemId}`,
+    name: getItemName(item),
+    peerDeviceName: deviceNames.get(task.peerDeviceId) ?? task.peerDeviceId,
+    sourceUri: item.sourceUri,
+    status: task.status,
+    time: formatTime(task.updatedAt),
+    timestamp: task.updatedAt
+  })))
+}
+
+function buildDateSections(records: TransferRecord[]): RecordSection[] {
+  const groups = new Map<string, TransferRecord[]>()
+  for (const record of records) {
+    const title = formatDateLabel(record.timestamp ?? 0)
+    const group = groups.get(title) ?? []
+    group.push(record)
+    groups.set(title, group)
+  }
+  return [...groups].map(([title, data]) => ({data, title}))
+}
+
+function buildDeviceSections(records: TransferRecord[]): RecordSection[] {
+  const groups = new Map<string, TransferRecord[]>()
+  for (const record of records) {
+    const title = record.peerDeviceName ?? '未知设备'
+    const group = groups.get(title) ?? []
+    group.push(record)
+    groups.set(title, group)
+  }
+  return [...groups].map(([title, data]) => ({data, title}))
+}
+
+function getItemDetail(item: OutgoingTransferItem): string {
+  return item.kind === 'text' ? `文字 · ${formatBytes(item.sizeBytes)}` : formatBytes(item.sizeBytes)
+}
+
+function getItemFileType(item: OutgoingTransferItem): RecordFileType {
+  if (item.kind === 'text') return 'text'
+  if (item.mimeType.startsWith('image/') || /\.(heic|jpeg|jpg|png|webp)$/i.test(item.name)) return 'image'
+  if (item.mimeType.startsWith('video/') || /\.(mov|mp4|mkv|webm)$/i.test(item.name)) return 'video'
+  return 'document'
+}
+
+function getItemName(item: OutgoingTransferItem): string {
+  if (item.kind !== 'text') return item.name
+  const preview = item.text?.replace(/\s+/g, ' ').trim()
+  return preview ? preview.slice(0, 80) : item.name
+}
+
+function formatDateLabel(timestamp: number): string {
+  const date = new Date(timestamp)
+  const today = new Date()
+  const midnight = new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime()
+  const yesterday = midnight - 24 * 60 * 60 * 1000
+  if (timestamp >= midnight) return '今天'
+  if (timestamp >= yesterday) return '昨天'
+  return date.toLocaleDateString()
+}
+
+function formatTime(timestamp: number): string {
+  return new Date(timestamp).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'})
+}
+
+function formatBytes(value: number): string {
+  if (value < 1024) return `${value} B`
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KiB`
+  return `${(value / (1024 * 1024)).toFixed(1)} MiB`
 }
 
 function matchesFilter(record: TransferRecord, filter: TransmissionRecordFilter) {
   const fileTypeMatches = filter.fileTypes.length === 0 || filter.fileTypes.includes(getRecordFileType(record))
   const statusMatches = filter.statuses.length === 0
-    || (filter.statuses.includes('success') && record.status === 'success')
-    || (filter.statuses.includes('failed') && record.status === 'interrupted')
+    || (filter.statuses.includes('success') && record.status === 'completed')
+    || (filter.statuses.includes('failed') && record.status === 'failed')
 
   return fileTypeMatches && statusMatches
 }
@@ -246,7 +314,7 @@ function RecordRow({
         <SymbolView
           name={TRANSMISSION_RECORD_FILE_TYPE_ICONS[fileType]}
           size={21}
-          tintColor={record.status === 'interrupted' ? config.textColor : theme.textSecondary}
+          tintColor={record.status === 'failed' ? config.textColor : theme.textSecondary}
         />
       </View>
 
@@ -293,11 +361,15 @@ function FilteredRecordList({
   filter,
   normalizedQuery,
   onRecordPress,
+  onRefresh,
+  refreshing,
   sections
 }: {
   filter: TransmissionRecordFilter
   normalizedQuery: string
   onRecordPress: (record: TransferRecord, dateLabel: string) => void
+  onRefresh: () => void
+  refreshing: boolean
   sections: RecordSection[]
 }) {
   const theme = useTheme()
@@ -319,6 +391,7 @@ function FilteredRecordList({
       contentContainerStyle={styles.pageContent}
       keyExtractor={(item) => item.id}
       ListEmptyComponent={EmptyState}
+      refreshControl={<RefreshControl colors={[theme.text]} onRefresh={onRefresh} refreshing={refreshing} tintColor={theme.text}/>}
       renderItem={({item, index, section}) => (
         <RecordRow
           dateLabel={section.title}
@@ -352,14 +425,34 @@ export default function TransmissionRecord() {
   const [activeTab, setActiveTab] = useState(0)
   const [filter, setFilter] = useState<TransmissionRecordFilter>({fileTypes: [], statuses: []})
   const [query, setQuery] = useState('')
+  const [records, setRecords] = useState<TransferRecord[]>([])
+  const [isRefreshing, setIsRefreshing] = useState(false)
   const hasActiveFilter = filter.fileTypes.length > 0 || filter.statuses.length > 0
 
-  // 优化：统一在顶层处理字符串格式化
   const normalizedQuery = useMemo(() => query.trim().toLocaleLowerCase(), [query])
+  const refreshRecords = useCallback(() => {
+    setRecords(listTransferRecords())
+  }, [])
+
+  const handleRefresh = useCallback(async () => {
+    setIsRefreshing(true)
+    try {
+      await new Promise<void>((resolve) => setTimeout(resolve, 0))
+      refreshRecords()
+    } finally {
+      setIsRefreshing(false)
+    }
+  }, [refreshRecords])
+
+  useFocusEffect(useCallback(() => {
+    refreshRecords()
+  }, [refreshRecords]))
+
+  const allRecordSections = useMemo(() => buildDateSections(records), [records])
 
   const deviceSections: RecordSection[] = useMemo(
-    () => DEVICE_GROUPS.map((group) => ({data: group.records, title: group.deviceName})),
-    []
+    () => buildDeviceSections(records),
+    [records]
   )
 
   const segmentWidth = (width - PAGE_HORIZONTAL_PADDING * 2 - 8) / TABS.length
@@ -484,7 +577,9 @@ export default function TransmissionRecord() {
             filter={filter}
             normalizedQuery={normalizedQuery}
             onRecordPress={handleOpenRecordDetail}
-            sections={ALL_RECORD_SECTIONS}
+            onRefresh={() => void handleRefresh()}
+            refreshing={isRefreshing}
+            sections={allRecordSections}
           />
         </View>
 
@@ -493,6 +588,8 @@ export default function TransmissionRecord() {
             filter={filter}
             normalizedQuery={normalizedQuery}
             onRecordPress={handleOpenRecordDetail}
+            onRefresh={() => void handleRefresh()}
+            refreshing={isRefreshing}
             sections={deviceSections}
           />
         </View>

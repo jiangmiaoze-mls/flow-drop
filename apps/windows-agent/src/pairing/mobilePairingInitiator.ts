@@ -19,6 +19,7 @@ export async function initiateMobilePairing(
   const controlPort = device.controlPort ?? PAIRING_CONTROL_PORT
   const endpoint = `ws://${device.address}:${controlPort}/v1/peer`
   const requestId = randomUUID()
+  let transferSecret: string | null = null
 
   await new Promise<void>((resolve, reject) => {
     let settled = false
@@ -54,11 +55,18 @@ export async function initiateMobilePairing(
       if (message.type !== 'pairing.resolved') return
       const payload = message.payload as Partial<PeerPairingResolutionPayload>
       if (payload.requestId !== requestId) return
-      finish(payload.status === 'approved' ? undefined : new Error(`Pairing ${payload.status ?? 'failed'}.`))
+      if (payload.status === 'approved' && isTransferSecret(payload.transferSecret)) {
+        transferSecret = payload.transferSecret
+        finish()
+        return
+      }
+      finish(new Error(`Pairing ${payload.status ?? 'failed'}.`))
     })
   })
 
   const now = Date.now()
+  if (!transferSecret) throw new Error('The mobile device did not provide a transfer credential.')
+  trustedDeviceStore.setTransferSecret(device.deviceId, transferSecret)
   const existing = trustedDeviceStore.get(device.deviceId)
   return trustedDeviceStore.upsert({
     controlPort,
@@ -71,6 +79,10 @@ export async function initiateMobilePairing(
     receiveEnabled: existing?.receiveEnabled ?? true,
     updatedAt: now
   })
+}
+
+function isTransferSecret(value: unknown): value is string {
+  return typeof value === 'string' && /^[a-f0-9]{64}$/i.test(value)
 }
 
 function parseMessage(value: unknown): PeerMessage | null {

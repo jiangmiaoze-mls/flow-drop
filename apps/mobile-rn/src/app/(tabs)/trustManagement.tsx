@@ -1,7 +1,7 @@
 import {SymbolView} from 'expo-symbols'
 import * as ExpoDevice from 'expo-device'
 import {useEffect, useState} from 'react'
-import {Platform, Pressable, ScrollView, StyleSheet, Switch, Text, View} from 'react-native'
+import {Alert, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, View} from 'react-native'
 
 import {Header} from '@/components/Header'
 import {PAGE_HORIZONTAL_PADDING} from '@/constants/layout'
@@ -80,10 +80,12 @@ function MyDeviceCard({
 
 function TrustedDeviceCard({
   device,
-  onReceiveEnabledChange
+  onReceiveEnabledChange,
+  onRemove
 }: {
   device: TrustedDevice
   onReceiveEnabledChange: (receiveEnabled: boolean) => void
+  onRemove: () => void
 }) {
   const theme = useTheme()
   const icon = device.deviceKind === 'mobile'
@@ -118,6 +120,13 @@ function TrustedDeviceCard({
           value={device.receiveEnabled}
         />
       </View>
+      <Pressable
+        accessibilityLabel={`解除与 ${device.deviceName} 的信任关系`}
+        accessibilityRole="button"
+        onPress={onRemove}
+        style={({pressed}) => [styles.untrustButton, {borderColor: '#C94C4C'}, pressed && styles.untrustButtonPressed]}>
+        <Text style={styles.untrustButtonText}>解除信任</Text>
+      </Pressable>
     </View>
   )
 }
@@ -128,6 +137,7 @@ export default function TrustManagement() {
   const [pairingSession, setPairingSession] = useState<PairingSession | null>(null)
   const devices = useTrustedDevicesStore((state) => state.devices)
   const loadTrustedDevices = useTrustedDevicesStore((state) => state.load)
+  const removeTrustedDevice = useTrustedDevicesStore((state) => state.remove)
   const setReceiveEnabled = useTrustedDevicesStore((state) => state.setReceiveEnabled)
 
   useEffect(() => {
@@ -186,6 +196,17 @@ export default function TrustManagement() {
       .catch((error) => console.warn('Unable to refresh the local pairing code.', error))
   }
 
+  const confirmUntrust = (device: TrustedDevice) => {
+    Alert.alert(
+      '解除信任',
+      `将从此手机删除“${device.deviceName}”的配对记录和传输凭据。对方设备上的记录不会被删除；再次传输前需要重新配对。`,
+      [
+        {style: 'cancel', text: '取消'},
+        {onPress: () => removeTrustedDevice(device.deviceId), style: 'destructive', text: '解除信任'}
+      ]
+    )
+  }
+
   return (
     <View style={[styles.screen, {backgroundColor: theme.background}]}>
       <Header>
@@ -210,6 +231,7 @@ export default function TrustManagement() {
             device={device}
             key={device.deviceId}
             onReceiveEnabledChange={(receiveEnabled) => setReceiveEnabled(device.deviceId, receiveEnabled)}
+            onRemove={() => confirmUntrust(device)}
           />
         ))}
       </ScrollView>
@@ -246,7 +268,10 @@ const styles = StyleSheet.create({
   },
   permissionTextContent: {flex: 1, marginRight: 12},
   permissionLabel: {fontSize: 15, fontWeight: '600'},
-  permissionDescription: {fontSize: 13, lineHeight: 18, marginTop: 3}
+  permissionDescription: {fontSize: 13, lineHeight: 18, marginTop: 3},
+  untrustButton: {alignItems: 'center', borderRadius: 6, borderWidth: 1, height: 38, justifyContent: 'center', marginTop: 18},
+  untrustButtonPressed: {opacity: 0.72},
+  untrustButtonText: {color: '#C94C4C', fontSize: 14, fontWeight: '600'}
 })
 
 function formatPairingExpiry(expiresAt: number): string {

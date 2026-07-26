@@ -10,6 +10,7 @@ import {AppState, Modal, Platform, Pressable, StyleSheet, Text, View} from 'reac
 
 import {useTheme} from '@/hooks/use-theme'
 import {mobilePairingService, type MobilePairingRequest} from '@/network/mobilePairingService'
+import {setTransferSecret} from '@/storage/transferCredentialRepository'
 import {useTrustedDevicesStore} from '@/store/useTrustedDevicesStore'
 
 
@@ -105,11 +106,13 @@ export default function RootLayout() {
     }
   }, [])
 
-  const handleIncomingPairingDecision = (status: 'approved' | 'rejected') => {
+  const handleIncomingPairingDecision = async (status: 'approved' | 'rejected') => {
     const request = incomingPairingRequest
     if (!request) return
     const resolvedRequest = mobilePairingService.resolvePairingRequest(request.requestId, status)
     if (status === 'approved' && resolvedRequest) {
+      if (!resolvedRequest.transferSecret) return
+      await setTransferSecret(resolvedRequest.deviceId, resolvedRequest.transferSecret)
       const now = Date.now()
       const existing = useTrustedDevicesStore.getState().devices.find((device) => device.deviceId === resolvedRequest.deviceId)
       useTrustedDevicesStore.getState().save({

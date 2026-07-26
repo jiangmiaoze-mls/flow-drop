@@ -60,6 +60,7 @@ const ConnectionBottomSheet = forwardRef<ConnectionBottomSheetRef, ConnectionBot
     const scanLineY = useRef(new Animated.Value(0)).current
     const hasConfirmedScan = useRef(false)
     const hasRequestedCameraForScannerEntry = useRef(false)
+    const isMounted = useRef(true)
     const targetPage = useRef<PageIndex>(0)
     const pendingCameraPermissionFlow = useRef<'request' | 'settings' | null>(null)
     const shouldReopenScannerAfterSettings = useRef(false)
@@ -74,6 +75,13 @@ const ConnectionBottomSheet = forwardRef<ConnectionBottomSheetRef, ConnectionBot
     const [isScannerPageVisible, setIsScannerPageVisible] = useState(false)
     const [isPresented, setIsPresented] = useState(false)
     const [isSubmitting, setIsSubmitting] = useState(false)
+
+    useEffect(() => {
+      isMounted.current = true
+      return () => {
+        isMounted.current = false
+      }
+    }, [])
 
     const [digits, setDigits] = useState(() => {
       const initialDigits = initialCode.replace(/\D/g, '').slice(0, CODE_LENGTH)
@@ -118,6 +126,8 @@ const ConnectionBottomSheet = forwardRef<ConnectionBottomSheetRef, ConnectionBot
     }, [scrollX])
 
     const presentScannerPage = useCallback(() => {
+      if (!isMounted.current) return
+
       hasConfirmedScan.current = false
       // 授权弹窗结束后不再自动二次请求；未授权时直接显示授权引导。
       hasRequestedCameraForScannerEntry.current = true
@@ -130,6 +140,8 @@ const ConnectionBottomSheet = forwardRef<ConnectionBottomSheetRef, ConnectionBot
       bottomSheetRef.current?.present()
 
       requestAnimationFrame(() => {
+        if (!isMounted.current) return
+
         scrollX.setValue(pageWidth)
         setActivePage(1)
         setIsPagerTransitioning(false)
@@ -193,7 +205,7 @@ const ConnectionBottomSheet = forwardRef<ConnectionBottomSheetRef, ConnectionBot
           try {
             await requestCameraPermission()
           } finally {
-            presentScannerPage()
+            if (isMounted.current) presentScannerPage()
           }
         })()
         return
@@ -218,7 +230,9 @@ const ConnectionBottomSheet = forwardRef<ConnectionBottomSheetRef, ConnectionBot
         if (nextState !== 'active' || !shouldReopenScannerAfterSettings.current) return
 
         shouldReopenScannerAfterSettings.current = false
-        void checkCameraPermission().finally(presentScannerPage)
+        void checkCameraPermission().finally(() => {
+          if (isMounted.current) presentScannerPage()
+        })
       })
 
       return () => subscription.remove()
@@ -352,7 +366,7 @@ const ConnectionBottomSheet = forwardRef<ConnectionBottomSheetRef, ConnectionBot
       } catch {
         hasConfirmedScan.current = false
       } finally {
-        setIsSubmitting(false)
+        if (isMounted.current) setIsSubmitting(false)
       }
     }, [isSubmitting, onConfirm])
 

@@ -27,6 +27,7 @@ export type MobilePairingRequest = {
   deviceName: string
   requestId: string
   requestedAt: number
+  transferSecret?: string
 }
 
 type PendingPairingRequest = MobilePairingRequest & {connection: MobilePeerConnection}
@@ -135,11 +136,13 @@ export class MobilePairingService {
     if (!pending) return null
 
     this.pendingRequests.delete(requestId)
+    const transferSecret = status === 'approved' ? createTransferSecret() : undefined
     pending.connection.send('pairing.resolved', {
       requestId,
-      status
+      status,
+      transferSecret
     } satisfies PeerPairingResolutionPayload)
-    return toMobilePairingRequest(pending)
+    return {...toMobilePairingRequest(pending), transferSecret}
   }
 
   private registerConnection(socket: Socket) {
@@ -372,6 +375,10 @@ async function createPairingCode(): Promise<string> {
   const bytes = await Crypto.getRandomBytesAsync(4)
   const value = ((bytes[0] * 0x1000000) + (bytes[1] * 0x10000) + (bytes[2] * 0x100) + bytes[3]) >>> 0
   return (value % 1_000_000).toString().padStart(6, '0')
+}
+
+function createTransferSecret() {
+  return Array.from(Crypto.getRandomBytes(32), (byte) => byte.toString(16).padStart(2, '0')).join('')
 }
 
 function toMobilePairingRequest({connection: _connection, ...request}: PendingPairingRequest): MobilePairingRequest {

@@ -25,6 +25,7 @@ export type PairingApprovalResolution = {
   request: PairingApprovalRequest
   requesterConnectionId?: string
   status: Exclude<PairingApprovalStatus, 'pending'>
+  transferSecret?: string
   trustedDevice?: TrustedDevice
 }
 
@@ -93,7 +94,8 @@ export class PairingService {
       receiveEnabled: existingDevice?.receiveEnabled ?? true,
       updatedAt: now
     })
-    return this.completePairingRequest(pendingApproval, 'approved', trustedDevice)
+    const transferSecret = this.trustedDeviceStore.createTransferSecret(pendingApproval.deviceId)
+    return this.completePairingRequest(pendingApproval, 'approved', trustedDevice, transferSecret)
   }
 
   getPairingRequestStatus(requestId: string): PairingApprovalStatus | null {
@@ -177,7 +179,8 @@ export class PairingService {
   private completePairingRequest(
     pendingApproval: PendingPairingApproval,
     status: Exclude<PairingApprovalStatus, 'pending'>,
-    trustedDevice?: TrustedDevice
+    trustedDevice?: TrustedDevice,
+    transferSecret?: string
   ): PairingApprovalResolution {
     this.pendingApprovals.delete(pendingApproval.requestId)
     const expiryTimer = this.expiryTimers.get(pendingApproval.requestId)
@@ -191,6 +194,7 @@ export class PairingService {
       request: toPairingApprovalRequest(pendingApproval),
       requesterConnectionId: pendingApproval.requesterConnectionId,
       status,
+      transferSecret,
       trustedDevice
     }
     for (const listener of this.resolutionListeners) listener(resolution)

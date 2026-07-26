@@ -17,6 +17,7 @@ const app: FastifyPluginAsync<AppOptions> = async (fastify, _options) => {
   await fastify.register(Plugins.realtimePlugin)
   await fastify.register(Plugins.discoveryPlugin)
   await fastify.register(Plugins.pairingPlugin)
+  await fastify.register(Plugins.transfersPlugin)
   await fastify.register(Plugins.peerWebSocketPlugin)
   await fastify.register(Plugins.sensibleAPI)
 

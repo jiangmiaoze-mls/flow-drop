@@ -12,6 +12,7 @@ import {PAGE_HORIZONTAL_PADDING} from '@/constants/layout'
 import {useTheme} from '@/hooks/use-theme'
 import {DiscoveryService} from '@/network/discoveryService'
 import {PairingError, verifyPairingCode} from '@/network/pairingClient'
+import {setTransferSecret} from '@/storage/transferCredentialRepository'
 import {useTrustedDevicesStore} from '@/store/useTrustedDevicesStore'
 import {getWifiIPv4BroadcastTargetAsync} from '@flowdrop/network/mobile'
 import type {Device, DiscoveredDevice, TrustedDevice} from '@flowdrop/types'
@@ -209,12 +210,14 @@ export default function FindDevice() {
 
     try {
       const deviceName = ExpoDevice.deviceName?.trim() || ExpoDevice.modelName?.trim() || 'FlowDrop Mobile'
-      await verifyPairingCode(peer, {
+      const pairingResult = await verifyPairingCode(peer, {
         code,
         deviceId: localDeviceId,
         deviceKind: 'mobile',
         deviceName
       })
+
+      await setTransferSecret(peer.id, pairingResult.transferSecret)
 
       const now = Date.now()
       const existingDevice = trustedDevicesById.get(peer.id)

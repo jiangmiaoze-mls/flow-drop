@@ -55,7 +55,8 @@ export class PeerConnectionManager {
   sendPairingResolution(resolution: PairingApprovalResolution) {
     const payload: PeerPairingResolutionPayload = {
       requestId: resolution.request.requestId,
-      status: resolution.status
+      status: resolution.status,
+      transferSecret: resolution.transferSecret
     }
     this.agentEventBus.publish({
       payload: {...resolution.request, status: resolution.status},

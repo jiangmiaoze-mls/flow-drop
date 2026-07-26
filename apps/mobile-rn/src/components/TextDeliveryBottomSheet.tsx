@@ -33,10 +33,18 @@ const TextDeliveryBottomSheet = forwardRef<
   const [text, setText] = useState('')
   const [isPresented, setIsPresented] = useState(false)
   const [isSubmitting, setIsSubmitting] = useState(false)
+  const isMounted = useRef(false)
   const canSubmit = text.trim().length > 0
 
   // 用于追踪键盘当前的可见状态
   const isKeyboardVisibleRef = useRef(false)
+
+  useEffect(() => {
+    isMounted.current = true
+    return () => {
+      isMounted.current = false
+    }
+  }, [])
 
   // 监听键盘弹起与收起事件
   useEffect(() => {
@@ -54,6 +62,7 @@ const TextDeliveryBottomSheet = forwardRef<
   }, [])
 
   const present = useCallback(() => {
+    if (!isMounted.current) return
     setIsPresented(true)
     bottomSheetRef.current?.present()
   }, [])
@@ -80,12 +89,12 @@ const TextDeliveryBottomSheet = forwardRef<
 
   const handleDismiss = useCallback(() => {
     Keyboard.dismiss()
-    setIsPresented(false)
+    if (isMounted.current) setIsPresented(false)
   }, [])
 
   const handleSubmit = useCallback(async () => {
     const content = text.trim()
-    if (!content || isSubmitting) {
+    if (!content || isSubmitting || !isMounted.current) {
       return
     }
 
@@ -94,10 +103,10 @@ const TextDeliveryBottomSheet = forwardRef<
       const isAccepted = await onSubmit?.(content)
       if (isAccepted === false) return
 
-      setText('')
+      if (isMounted.current) setText('')
       dismiss()
     } finally {
-      setIsSubmitting(false)
+      if (isMounted.current) setIsSubmitting(false)
     }
   }, [dismiss, isSubmitting, onSubmit, text])
 

@@ -24,6 +24,21 @@ const LAPTOP_ICON: SymbolViewProps['name'] = {
   web: 'laptop_mac'
 }
 
+const TRANSFER_STATUS_LABELS: Record<TransmissionRecordDetail['status'], string> = {
+  cancelled: '已取消',
+  completed: '传输成功',
+  completing: '正在完成',
+  draft: '草稿',
+  failed: '传输失败',
+  negotiating: '正在协商',
+  paused: '已暂停',
+  preparing: '正在准备',
+  queued: '等待发送',
+  transferring: '传输中',
+  verifying: '正在校验',
+  waiting_for_peer: '等待对端'
+}
+
 export type {TransmissionRecordDetail} from '@flowdrop/types'
 
 export type TransmissionRecordDetailBottomSheetRef = {
@@ -60,12 +75,15 @@ const TransmissionRecordDetailBottomSheet = forwardRef<
     return <BottomSheet ref={bottomSheetRef}>{null}</BottomSheet>
   }
 
-  const isSuccess = record.status === 'success'
+  const isSuccess = record.status === 'completed'
   const isSent = record.direction === 'send'
-  const senderName = isSent ? 'My iPhone 15' : 'MacBook Pro'
-  const receiverName = isSent ? 'MacBook Pro' : 'My iPhone 15'
+  const senderName = isSent ? '本机' : (record.peerDeviceName ?? '对方设备')
+  const receiverName = isSent ? (record.peerDeviceName ?? '对方设备') : '本机'
   const senderIcon = isSent ? PHONE_ICON : LAPTOP_ICON
   const receiverIcon = isSent ? LAPTOP_ICON : PHONE_ICON
+  const isFailure = record.status === 'failed'
+  const statusColor = isSuccess ? '#168A43' : isFailure ? '#E5484D' : '#3468C0'
+  const statusDotColor = isSuccess ? '#2DC866' : isFailure ? '#F04449' : '#4C82D9'
 
   return (
     <BottomSheet
@@ -111,19 +129,20 @@ const TransmissionRecordDetailBottomSheet = forwardRef<
         <View style={styles.detailList}>
           <DetailRow label="当前状态">
             <View style={styles.statusValue}>
-              <View style={[styles.statusDot, {backgroundColor: isSuccess ? '#2DC866' : '#F04449'}]}/>
-              <Text style={[styles.statusText, {color: isSuccess ? '#168A43' : '#E5484D'}]}>
-                {isSuccess ? '传输成功' : '传输中断'}
+              <View style={[styles.statusDot, {backgroundColor: statusDotColor}]}/>
+              <Text style={[styles.statusText, {color: statusColor}]}>
+                {TRANSFER_STATUS_LABELS[record.status]}
               </Text>
             </View>
           </DetailRow>
-          <DetailRow label="保存位置" last>
-            <Text numberOfLines={2}
-                  style={[styles.locationText, {color: theme.text}]}>/Users/admin/Downloads/FlowDrop/</Text>
+          <DetailRow label="本机暂存" last>
+            <Text numberOfLines={2} style={[styles.locationText, {color: theme.text}]}>
+              {record.sourceUri ?? '文字传输不产生本机暂存文件'}
+            </Text>
           </DetailRow>
         </View>
 
-        <View style={styles.actions}>
+        {onDelete || onOpenFolder || onShare ? <View style={styles.actions}>
           <Pressable
             accessibilityLabel="查看文件夹"
             accessibilityRole="button"
@@ -152,7 +171,7 @@ const TransmissionRecordDetailBottomSheet = forwardRef<
               <Text style={[styles.secondaryButtonText, {color: '#F04449'}]}>删除记录</Text>
             </Pressable>
           </View>
-        </View>
+        </View> : null}
       </BottomSheet.ScrollView>
     </BottomSheet>
   )

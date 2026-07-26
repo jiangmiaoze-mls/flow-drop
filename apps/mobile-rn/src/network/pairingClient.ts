@@ -26,7 +26,7 @@ export class PairingError extends Error {
 export async function verifyPairingCode(
   peer: Device,
   request: PairingVerificationRequest
-): Promise<void> {
+): Promise<{transferSecret: string}> {
   if (!peer.controlPort) {
     throw new Error('The selected device does not expose a pairing endpoint.')
   }
@@ -39,7 +39,7 @@ export async function verifyPairingCode(
   }
   const endpoint = `ws://${peer.ip}:${peer.controlPort}/v1/peer`
 
-  await new Promise<void>((resolve, reject) => {
+  return new Promise<{transferSecret: string}>((resolve, reject) => {
     let settled = false
     let hasSubmittedRequest = false
     let reconnectTimer: ReturnType<typeof setTimeout> | null = null
@@ -52,9 +52,10 @@ export async function verifyPairingCode(
       if (reconnectTimer) clearTimeout(reconnectTimer)
       socket?.close()
       if (error) reject(error)
-      else resolve()
+      else resolve(result!)
     }
     const timeout = setTimeout(() => finish(new PairingError('PAIRING_APPROVAL_EXPIRED')), PAIRING_WAIT_TIMEOUT_MS)
+    let result: {transferSecret: string} | null = null
 
     const scheduleReconnect = () => {
       if (settled || reconnectScheduled) return
@@ -118,6 +119,11 @@ export async function verifyPairingCode(
         const payload = message.payload as Partial<PeerPairingResolutionPayload>
         if (payload.requestId !== requestId) return
         if (payload.status === 'approved') {
+          if (!isTransferSecret(payload.transferSecret)) {
+            finish(new PairingError('PAIRING_APPROVAL_EXPIRED'))
+            return
+          }
+          result = {transferSecret: payload.transferSecret}
           finish()
         } else if (payload.status === 'rejected') {
           finish(new PairingError('PAIRING_REJECTED'))
@@ -129,6 +135,10 @@ export async function verifyPairingCode(
 
     connect()
   })
+}
+
+function isTransferSecret(value: unknown): value is string {
+  return typeof value === 'string' && /^[a-f0-9]{64}$/i.test(value)
 }
 
 function parseMessage(value: unknown): PeerMessage | null {

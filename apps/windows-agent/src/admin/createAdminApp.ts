@@ -3,11 +3,16 @@ import Fastify, {type FastifyInstance} from 'fastify'
 import path from 'node:path'
 
 import type {AgentEvent, PairingApprovalStatusResponse} from '@flowdrop/types'
+import {LocalFileDemoStore, type LocalFileDemoDirection} from './localFileDemoStore'
 import {initiateMobilePairing} from '../pairing/mobilePairingInitiator'
 
 
 export function createAdminApp(peer: FastifyInstance): FastifyInstance {
   const admin = Fastify({logger: true})
+  const localFileDemoStore = new LocalFileDemoStore()
+  admin.addContentTypeParser('application/octet-stream', {bodyLimit: 32 * 1024 * 1024, parseAs: 'buffer'}, (_request, body, done) => {
+    done(null, body)
+  })
   admin.addHook('onRequest', async (request, reply) => {
     if (!isLoopbackAddress(request.ip)) {
       return reply.code(403).send({message: 'The Agent admin service is only available on this computer.'})
@@ -26,6 +31,23 @@ export function createAdminApp(peer: FastifyInstance): FastifyInstance {
 
   admin.get('/api/trusted-devices', async () => ({devices: peer.trustedDeviceStore.list()}))
 
+  admin.get('/api/transfers', async () => ({transfers: peer.transferService.listIncomingTransfers()}))
+
+  admin.get('/api/file-demo/transfers', async () => ({transfers: localFileDemoStore.list()}))
+
+  admin.post('/api/file-demo/:direction', async (request, reply) => {
+    const {direction} = request.params as {direction: string}
+    const fileName = parseHeaderValue(request.headers['x-flowdrop-file-name'])
+    const mimeType = parseHeaderValue(request.headers['x-flowdrop-file-mime']) || 'application/octet-stream'
+    if (!isLocalFileDemoDirection(direction) || !fileName || !Buffer.isBuffer(request.body)) {
+      return reply.code(400).send({message: 'A direction, file name, and binary file body are required.'})
+    }
+
+    const transfer = localFileDemoStore.save(direction, {data: request.body, fileName, mimeType})
+    peer.agentEventBus.publish({payload: transfer, type: 'file-demo.changed'})
+    return reply.code(201).send({transfer})
+  })
+
   admin.patch('/api/paired-devices/:deviceId/receive-permission', async (request, reply) => {
     const {deviceId} = request.params as {deviceId: string}
     const body = request.body as {receiveEnabled?: unknown}
@@ -38,6 +60,20 @@ export function createAdminApp(peer: FastifyInstance): FastifyInstance {
 
     peer.agentEventBus.publish({payload: device, type: 'permission.changed'})
     return {device}
+  })
+
+  admin.delete('/api/paired-devices/:deviceId', async (request, reply) => {
+    const {deviceId} = request.params as {deviceId: string}
+    if (!isValidDeviceId(deviceId)) {
+      return reply.code(400).send({message: 'A valid device ID is required.'})
+    }
+    if (!peer.trustedDeviceStore.get(deviceId)) {
+      return reply.code(404).send({message: 'The paired device does not exist.'})
+    }
+
+    peer.trustedDeviceStore.delete(deviceId)
+    peer.agentEventBus.publish({payload: {deviceId}, type: 'device.changed'})
+    return reply.code(204).send()
   })
 
   admin.get('/api/admin/events', async (request, reply) => {
@@ -135,4 +171,18 @@ function isLoopbackAddress(address: string): boolean {
 
 function isValidDeviceId(value: unknown): value is string {
   return typeof value === 'string' && value.trim().length > 0 && value.length <= 128
+}
+
+function isLocalFileDemoDirection(value: string): value is LocalFileDemoDirection {
+  return value === 'receive' || value === 'send'
+}
+
+function parseHeaderValue(value: string | string[] | undefined): string | null {
+  if (typeof value !== 'string' || value.length === 0 || value.length > 512) return null
+  try {
+    const decoded = decodeURIComponent(value)
+    return decoded.trim() || null
+  } catch {
+    return null
+  }
 }

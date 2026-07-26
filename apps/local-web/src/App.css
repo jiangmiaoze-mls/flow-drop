@@ -33,6 +33,12 @@ h2 {
   font-size: 18px;
 }
 
+h3 {
+  color: #1c242d;
+  font-size: 15px;
+  margin: 0;
+}
+
 p,
 span,
 small {
@@ -97,6 +103,144 @@ section + section {
 
 .section-heading {
   margin-bottom: 12px;
+}
+
+.section-description {
+  line-height: 1.5;
+  margin-top: 6px;
+  max-width: 760px;
+}
+
+.file-demo-section {
+  background: #f8fafb;
+  border-bottom: 1px solid #d8dde3;
+  border-top: 1px solid #d8dde3;
+  margin-left: -28px;
+  margin-right: -28px;
+  padding: 24px 28px;
+}
+
+.file-demo-actions,
+.file-demo-grid {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.file-demo-actions {
+  margin-top: 16px;
+}
+
+.file-action {
+  background: #146c94;
+  border: 1px solid #146c94;
+  border-radius: 6px;
+  color: #ffffff;
+  cursor: pointer;
+  display: grid;
+  gap: 4px;
+  padding: 14px;
+}
+
+.file-action span {
+  color: inherit;
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.file-action small {
+  color: inherit;
+  opacity: 0.88;
+}
+
+.file-action input {
+  display: none;
+}
+
+.file-action-secondary {
+  background: #ffffff;
+  border-color: #146c94;
+}
+
+.file-action-secondary span,
+.file-action-secondary small {
+  color: #146c94;
+}
+
+.file-action.is-busy {
+  cursor: wait;
+  opacity: 0.65;
+}
+
+.file-list {
+  background: #ffffff;
+  border: 1px solid #d8dde3;
+  border-radius: 6px;
+  margin-top: 18px;
+  padding: 14px;
+}
+
+.file-list .section-heading {
+  margin-bottom: 8px;
+}
+
+.file-list ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.file-list li {
+  align-items: center;
+  border-top: 1px solid #e6eaee;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+  padding: 10px 0;
+}
+
+.file-list li strong,
+.file-list li small {
+  display: block;
+}
+
+.file-list li small {
+  margin-top: 4px;
+}
+
+.file-status {
+  border-radius: 4px;
+  font-size: 12px;
+  padding: 4px 7px;
+  white-space: nowrap;
+}
+
+.file-status.received {
+  background: #dff3e6;
+  color: #17663a;
+}
+
+.file-status.waiting_for_peer {
+  background: #fff0cd;
+  color: #7d5800;
+}
+
+.file-status.negotiating,
+.file-status.transferring,
+.file-status.verifying {
+  background: #dcecf8;
+  color: #145a82;
+}
+
+.file-status.completed {
+  background: #dff3e6;
+  color: #17663a;
+}
+
+.file-status.failed,
+.file-status.cancelled {
+  background: #fce4e2;
+  color: #a33b32;
 }
 
 .empty,
@@ -196,6 +340,17 @@ td small {
 @media (max-width: 720px) {
   .page {
     padding: 18px;
+  }
+
+  .file-demo-section {
+    margin-left: -18px;
+    margin-right: -18px;
+    padding: 20px 18px;
+  }
+
+  .file-demo-actions,
+  .file-demo-grid {
+    grid-template-columns: 1fr;
   }
 
   .pairing-panel {

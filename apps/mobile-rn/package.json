@@ -19,6 +19,7 @@
     "@flowdrop/network": "workspace:*",
     "@flowdrop/types": "workspace:*",
     "@gorhom/bottom-sheet": "^5.2.14",
+    "@noble/hashes": "2.2.0",
     "expo": "~57.0.8",
     "expo-application": "~57.0.2",
     "expo-camera": "~57.0.3",

@@ -110,7 +110,7 @@ export type AgentEvent = {
   eventId: string
   occurredAt: number
   payload: unknown
-  type: 'device.changed' | 'pairing.requested' | 'pairing.resolved' | 'permission.changed'
+  type: 'device.changed' | 'file-demo.changed' | 'pairing.requested' | 'pairing.resolved' | 'permission.changed' | 'transfer.changed'
 }
 
 export type PeerMessage<TPayload = unknown> = {
@@ -134,6 +134,7 @@ export type PeerPairingRequestPayload = {
 export type PeerPairingResolutionPayload = {
   requestId: string
   status: Exclude<PairingApprovalStatus, 'pending'>
+  transferSecret?: string
 }
 
 export type PeerPairingStatusPayload = {
@@ -142,7 +143,78 @@ export type PeerPairingStatusPayload = {
 
 export type TransferDirection = 'receive' | 'send'
 
-export type TransmissionRecordStatus = 'interrupted' | 'success'
+export type TransferTaskStatus =
+  | 'cancelled'
+  | 'completed'
+  | 'completing'
+  | 'draft'
+  | 'failed'
+  | 'negotiating'
+  | 'paused'
+  | 'preparing'
+  | 'queued'
+  | 'transferring'
+  | 'verifying'
+  | 'waiting_for_peer'
+
+export type TransferItemKind = 'file' | 'text'
+
+export type TransferFailureCode =
+  | 'AUTHENTICATION_REQUIRED'
+  | 'DEVICE_NOT_PAIRED'
+  | 'FILE_CHANGED'
+  | 'HASH_MISMATCH'
+  | 'INSUFFICIENT_STORAGE'
+  | 'INVALID_TRANSFER'
+  | 'NETWORK_TIMEOUT'
+  | 'PEER_OFFLINE'
+  | 'PROTOCOL_VERSION_UNSUPPORTED'
+  | 'TRANSFER_RECEIVE_DISABLED'
+
+export type TransferItemDescriptor = {
+  itemId: string
+  kind: TransferItemKind
+  mimeType: string
+  name: string
+  sha256: string
+  sizeBytes: number
+  text?: string
+}
+
+export type CreateTransferRequest = {
+  chunkSizeBytes?: number
+  items: TransferItemDescriptor[]
+  sourceDeviceId: string
+  transferId: string
+  v: 1
+}
+
+export type TransferItem = Omit<TransferItemDescriptor, 'text'> & {
+  receivedBytes: number
+  receivedChunkIndexes: number[]
+  status: TransferTaskStatus
+}
+
+export type TransferTask = {
+  chunkSizeBytes: number
+  createdAt: number
+  direction: TransferDirection
+  failureCode?: TransferFailureCode
+  items: TransferItem[]
+  peerDeviceId: string
+  status: TransferTaskStatus
+  totalBytes: number
+  transferredBytes: number
+  transferId: string
+  updatedAt: number
+  v: 1
+}
+
+export type TransferStatusResponse = {
+  task: TransferTask
+}
+
+export type TransmissionRecordStatus = TransferTaskStatus
 
 export type TransmissionRecordFileType = 'document' | 'image' | 'link' | 'text' | 'video'
 
@@ -159,8 +231,11 @@ export type TransferRecord = {
   fileType?: TransmissionRecordFileType
   id: string
   name: string
+  peerDeviceName?: string
+  sourceUri?: string
   status: TransmissionRecordStatus
   time: string
+  timestamp?: number
 }
 
 export type TransmissionRecordDetail = Omit<TransferRecord, 'direction' | 'fileType'> & {

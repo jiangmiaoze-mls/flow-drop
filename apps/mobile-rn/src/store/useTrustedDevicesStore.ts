@@ -7,6 +7,7 @@ import {
   setTrustedDeviceReceiveEnabled,
   upsertTrustedDevice
 } from '@/storage/trustedDeviceRepository'
+import {deleteTransferSecret} from '@/storage/transferCredentialRepository'
 
 
 type TrustedDevicesState = {
@@ -24,6 +25,9 @@ export const useTrustedDevicesStore = create<TrustedDevicesState>((set) => ({
   load: () => set({devices: listTrustedDevices(), isLoaded: true}),
   remove: (deviceId) => {
     deleteTrustedDevice(deviceId)
+    void deleteTransferSecret(deviceId).catch((error) => {
+      console.warn('Unable to remove the transfer credential.', error)
+    })
     set((state) => ({devices: state.devices.filter((device) => device.deviceId !== deviceId)}))
   },
   save: (device) => {
