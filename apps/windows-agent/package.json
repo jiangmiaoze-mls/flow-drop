@@ -19,6 +19,8 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "@flowdrop/config": "workspace:*",
+    "@flowdrop/types": "workspace:*",
     "@fastify/autoload": "^6.0.0",
     "@fastify/sensible": "^6.0.0",
     "@fastify/static": "^10.1.2",

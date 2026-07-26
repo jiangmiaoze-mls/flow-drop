@@ -1,14 +1,18 @@
+import * as ExpoDevice from 'expo-device'
 import {useRouter} from 'expo-router'
 import {SymbolView} from 'expo-symbols'
-import {useCallback, useRef} from 'react'
-import {FlatList, Pressable, StyleSheet, Text, View} from 'react-native'
+import {useCallback, useEffect, useRef} from 'react'
+import {FlatList, Platform, Pressable, StyleSheet, Text, View} from 'react-native'
 
 import ConnectionBottomSheet, {type ConnectionBottomSheetRef} from '@/components/ConnectionBottomSheet'
 import {DiscoveryPulse} from '@/components/DiscoveryPulse'
 import {Header} from '@/components/Header'
 import {PAGE_HORIZONTAL_PADDING} from '@/constants/layout'
 import {useTheme} from '@/hooks/use-theme'
-import type {Device} from '@/types/temp'
+import {DiscoveryService} from '@/network/discoveryService'
+import type {Device} from '@flowdrop/types'
+import {useAccessFineLocationPermission} from '@/hooks/usePermissions'
+
 
 const DEVICES: Device[] = [
   {id: 'work-pc', name: 'WORK-PC', ip: '192.168.1.100', type: 'desktop', authorized: true},
@@ -17,14 +21,72 @@ const DEVICES: Device[] = [
   {id: 'mac-1-design', name: 'MAC-STUDIO-DESIGN', ip: '192.168.1.112', type: 'laptop'}
 ]
 
-function HomeListHeader() {
+type PermissionsTipsProps = {
+  onOpenSettings: () => void
+}
+
+function PermissionsTips({onOpenSettings}: PermissionsTipsProps) {
+  const theme = useTheme()
+
+  return (
+    <View style={[styles.permissionsTip, {
+      backgroundColor: theme.backgroundElement,
+      borderColor: theme.backgroundSelected
+    }]}>
+      <SymbolView
+        name={{ios: 'questionmark.circle', android: 'help_outline', web: 'help_outline'}}
+        size={25}
+        tintColor={theme.textSecondary}
+      />
+      <View style={styles.permissionsTipContent}>
+        <Text style={[styles.permissionsTipText, {color: theme.textSecondary}]}>未获取权限。</Text>
+        <Pressable
+          accessibilityRole="link"
+          accessibilityLabel="查看权限授权引导"
+          hitSlop={6}
+          onPress={onOpenSettings}>
+          <Text style={[styles.permissionsGuideText, {color: theme.text}]}>去设置开启</Text>
+        </Pressable>
+      </View>
+    </View>
+  )
+}
+
+type HomeListHeaderProps = {
+  hasLocationPermission: boolean
+  onOpenLocationSettings: () => void
+}
+
+function HomeListHeader({hasLocationPermission, onOpenLocationSettings}: HomeListHeaderProps) {
   const theme = useTheme()
 
   return (
     <View style={styles.listHeader}>
       <View style={styles.discoverySection}>
         <DiscoveryPulse/>
-        <Text style={[styles.discoveryText, {color: theme.textSecondary}]}>正在寻找局域网中的电脑...</Text>
+
+        {
+          hasLocationPermission ?
+            <>
+              <Text style={[styles.discoveryText, {color: theme.textSecondary}]}>正在寻找局域网中的电脑...</Text>
+              <Pressable
+                accessibilityLabel="手动输入 IP 连接"
+                accessibilityRole="button"
+                style={({pressed}) => [
+                  styles.manualConnectButton,
+                  {backgroundColor: theme.backgroundElement},
+                  pressed && styles.manualConnectButtonPressed
+                ]}>
+                <SymbolView
+                  name={{ios: 'keyboard', android: 'keyboard', web: 'keyboard'}}
+                  size={20}
+                  tintColor={theme.textSecondary}
+                />
+                <Text style={[styles.manualConnectText, {color: theme.textSecondary}]}>手动输入 IP 连接</Text>
+              </Pressable>
+            </> :
+            <PermissionsTips onOpenSettings={onOpenLocationSettings}/>
+        }
       </View>
     </View>
   )
@@ -78,8 +140,16 @@ function DeviceCard({device, onPress}: DeviceCardProps) {
 export default function FindDevice() {
   const theme = useTheme()
   const connectionSheetRef = useRef<ConnectionBottomSheetRef>(null)
+  const discoveryServiceRef = useRef<DiscoveryService | null>(null)
   const router = useRouter()
-
+  const {
+    isLocationPermissionGranted,
+    openLocationPermissionSettings,
+    requestAccessFineLocationPermissionIfNeeded
+  } = useAccessFineLocationPermission()
+  const hasDiscoveryPermission = Platform.OS === 'ios' || (
+    Platform.OS === 'android' && isLocationPermissionGranted
+  )
   const handleDevicePress = useCallback((device: Device) => {
     if (!device.authorized) {
       connectionSheetRef.current?.present()
@@ -93,8 +163,8 @@ export default function FindDevice() {
         id: device.id,
         ip: device.ip,
         name: device.name,
-        type: device.type,
-      },
+        type: device.type
+      }
     })
   }, [router])
 
@@ -105,6 +175,32 @@ export default function FindDevice() {
   const renderDevice = useCallback(({item}: { item: Device }) => (
     <DeviceCard device={item} onPress={handleDevicePress}/>
   ), [handleDevicePress])
+
+  useEffect(() => {
+    if (Platform.OS !== 'android') return
+    void requestAccessFineLocationPermissionIfNeeded()
+  }, [requestAccessFineLocationPermissionIfNeeded])
+
+  useEffect(() => {
+    if (!hasDiscoveryPermission) return
+
+    const deviceName = ExpoDevice.deviceName?.trim() || ExpoDevice.modelName?.trim() || 'FlowDrop Mobile'
+    const discoveryService = new DiscoveryService(deviceName)
+    discoveryServiceRef.current = discoveryService
+
+    void discoveryService.start().catch((error: unknown) => {
+      if (discoveryServiceRef.current === discoveryService) {
+        console.warn('Failed to start local network discovery.', error)
+      }
+    })
+
+    return () => {
+      if (discoveryServiceRef.current === discoveryService) {
+        discoveryServiceRef.current = null
+      }
+      discoveryService.stop()
+    }
+  }, [hasDiscoveryPermission])
 
   return (
     <View style={[styles.screen, {backgroundColor: theme.background}]}>
@@ -119,13 +215,17 @@ export default function FindDevice() {
         data={DEVICES}
         ItemSeparatorComponent={DeviceSeparator}
         keyExtractor={(item) => item.id}
-        ListHeaderComponent={HomeListHeader}
+        ListHeaderComponent={(
+          <HomeListHeader
+            hasLocationPermission={hasDiscoveryPermission}
+            onOpenLocationSettings={openLocationPermissionSettings}
+          />
+        )}
         renderItem={renderDevice}
         showsVerticalScrollIndicator={false}
         style={styles.list}
       />
 
-      {/* 极简调用的新组件 */}
       <ConnectionBottomSheet
         ref={connectionSheetRef}
         onConfirm={handleConfirmConnection}
@@ -148,9 +248,7 @@ const styles = StyleSheet.create({
   contentContainer: {
     paddingBottom: 28
   },
-  listHeader: {
-    marginBottom: 24
-  },
+  listHeader: {},
   headerTitle: {
     fontSize: 23,
     fontWeight: '700'
@@ -163,6 +261,50 @@ const styles = StyleSheet.create({
   discoveryText: {
     fontSize: 15,
     marginTop: 8
+  },
+  manualConnectButton: {
+    alignItems: 'center',
+    borderRadius: 22,
+    flexDirection: 'row',
+    height: 44,
+    justifyContent: 'center',
+    marginTop: 16,
+    paddingHorizontal: 20
+  },
+  manualConnectButtonPressed: {
+    opacity: 0.72
+  },
+  manualConnectText: {
+    fontSize: 16,
+    fontWeight: '600',
+    marginLeft: 9
+  },
+  permissionsTip: {
+    alignItems: 'center',
+    alignSelf: 'stretch',
+    borderRadius: 14,
+    borderWidth: 1,
+    flexDirection: 'row',
+    marginHorizontal: PAGE_HORIZONTAL_PADDING,
+    marginTop: 22,
+    minHeight: 78,
+    paddingHorizontal: 18
+  },
+  permissionsTipContent: {
+    flex: 1,
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    marginLeft: 15,
+    minWidth: 0
+  },
+  permissionsTipText: {
+    fontSize: 16,
+    lineHeight: 24
+  },
+  permissionsGuideText: {
+    fontSize: 16,
+    lineHeight: 24,
+    textDecorationLine: 'underline'
   },
   deviceCard: {
     alignItems: 'center',

@@ -2,15 +2,44 @@ import 'react-native-gesture-handler'
 
 import {BottomSheetModalProvider} from '@gorhom/bottom-sheet'
 import * as SplashScreen from 'expo-splash-screen'
-import {useColorScheme} from 'react-native'
 import {GestureHandlerRootView} from 'react-native-gesture-handler'
 import {Stack} from 'expo-router'
+import {useAccessFineLocationPermission} from '@/hooks/usePermissions'
+import {useEffect, useState} from 'react'
+import {AppState} from 'react-native'
 
 
-SplashScreen.preventAutoHideAsync()
+void SplashScreen.preventAutoHideAsync()
 
-export default function TabLayout() {
-  const colorScheme = useColorScheme()
+export default function RootLayout() {
+  const [isReady, setIsReady] = useState(false)
+  const {checkAccessFineLocationPermission} = useAccessFineLocationPermission()
+
+  useEffect(() => {
+    const initialize = async () => {
+      try {
+        await checkAccessFineLocationPermission()
+      } finally {
+        setIsReady(true)
+        await SplashScreen.hideAsync()
+      }
+    }
+
+    void initialize()
+
+    const subscription = AppState.addEventListener('change', (nextState) => {
+      if (nextState === 'active') {
+        void checkAccessFineLocationPermission()
+      }
+    })
+
+    return () => subscription.remove()
+  }, [checkAccessFineLocationPermission])
+
+  if (!isReady) {
+    return null
+  }
+
   return (
     <GestureHandlerRootView style={{flex: 1}}>
       <BottomSheetModalProvider>
