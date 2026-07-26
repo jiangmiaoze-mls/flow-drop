@@ -1,7 +1,7 @@
 import * as Application from 'expo-application'
 import * as Crypto from 'expo-crypto'
 import * as SecureStore from 'expo-secure-store'
-import {DISCOVERY_BROADCAST_ADDRESS, DISCOVERY_PORT} from '@flowdrop/config'
+import {DISCOVERY_BROADCAST_ADDRESS, DISCOVERY_PORT, PAIRING_CONTROL_PORT} from '@flowdrop/config'
 import type {
   DiscoveredDevice,
   DiscoveryAnnouncement,
@@ -127,8 +127,10 @@ export class DiscoveryService {
     if (!this.running || !this.socket || !this.deviceIdValue) return
 
     const payload: DiscoveryAnnouncement = {
+      controlPort: PAIRING_CONTROL_PORT,
       deviceId: this.deviceIdValue,
       deviceName: this.deviceName,
+      pairingAvailable: true,
       protocol: PROTOCOL,
       type: 'announce',
       version: PROTOCOL_VERSION
@@ -233,10 +235,13 @@ export class DiscoveryService {
     if (message.length > MAX_MESSAGE_BYTES) return
 
     const announcement = parseAnnouncement(message)
-    if (!announcement || announcement.deviceId === this.deviceIdValue) return
+    if (!announcement) return
+
+    if (announcement.deviceId === this.deviceIdValue) return
 
     const device: DiscoveredDevice = {
       address: remote.address,
+      controlPort: announcement.controlPort,
       deviceId: announcement.deviceId,
       deviceName: announcement.deviceName,
       lastSeenAt: Date.now(),
@@ -252,6 +257,7 @@ export class DiscoveryService {
 
     if (
       previous.address !== device.address ||
+      previous.controlPort !== device.controlPort ||
       previous.deviceName !== device.deviceName ||
       previous.port !== device.port
     ) {
@@ -282,7 +288,7 @@ export class DiscoveryService {
   }
 }
 
-async function getDeviceId(): Promise<string> {
+export async function getDeviceId(): Promise<string> {
   if (Platform.OS === 'android') {
     const androidId = Application.getAndroidId()
     if (!isValidDeviceId(androidId)) {

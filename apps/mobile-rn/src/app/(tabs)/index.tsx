@@ -1,17 +1,20 @@
 import * as ExpoDevice from 'expo-device'
 import {useRouter} from 'expo-router'
 import {SymbolView} from 'expo-symbols'
-import {useCallback, useEffect, useRef, useState} from 'react'
+import {useCallback, useEffect, useMemo, useRef, useState} from 'react'
 import {FlatList, Platform, Pressable, StyleSheet, Text, View} from 'react-native'
 
+import {BasicAlertDialog} from '@/components/BasicAlertDialog'
 import ConnectionBottomSheet, {type ConnectionBottomSheetRef} from '@/components/ConnectionBottomSheet'
 import {DiscoveryPulse} from '@/components/DiscoveryPulse'
 import {Header} from '@/components/Header'
 import {PAGE_HORIZONTAL_PADDING} from '@/constants/layout'
 import {useTheme} from '@/hooks/use-theme'
 import {DiscoveryService} from '@/network/discoveryService'
+import {PairingError, verifyPairingCode} from '@/network/pairingClient'
+import {useTrustedDevicesStore} from '@/store/useTrustedDevicesStore'
 import {getWifiIPv4BroadcastTargetAsync} from '@flowdrop/network/mobile'
-import type {Device, DiscoveredDevice} from '@flowdrop/types'
+import type {Device, DiscoveredDevice, TrustedDevice} from '@flowdrop/types'
 import {useAccessFineLocationPermission} from '@/hooks/usePermissions'
 
 
@@ -20,7 +23,8 @@ function toDevice(discoveredDevice: DiscoveredDevice): Device {
     id: discoveredDevice.deviceId,
     ip: discoveredDevice.address,
     name: discoveredDevice.deviceName,
-    type: 'desktop'
+    type: 'desktop',
+    controlPort: discoveredDevice.controlPort
   }
 }
 
@@ -115,7 +119,7 @@ function DeviceCard({device, onPress}: DeviceCardProps) {
       style={[
         styles.deviceCard,
         {backgroundColor: theme.backgroundElement},
-        device.authorized && styles.authorizedCard
+        device.paired && styles.authorizedCard
       ]}>
       <View style={styles.deviceIcon}>
         <SymbolView name={iconName} size={27} tintColor="#111111"/>
@@ -124,9 +128,9 @@ function DeviceCard({device, onPress}: DeviceCardProps) {
       <View style={styles.deviceInfo}>
         <View style={styles.deviceNameRow}>
           <Text numberOfLines={1} style={[styles.deviceName, {color: theme.text}]}>{device.name}</Text>
-          {device.authorized ? (
+          {device.paired ? (
             <View style={styles.authorizedBadge}>
-              <Text style={styles.authorizedText}>已授权</Text>
+              <Text style={styles.authorizedText}>已配对</Text>
             </View>
           ) : null}
         </View>
@@ -135,10 +139,10 @@ function DeviceCard({device, onPress}: DeviceCardProps) {
 
       <Pressable
         accessibilityRole="button"
-        accessibilityLabel={`${device.authorized ? '进入传输' : '连接'} ${device.name}`}
+        accessibilityLabel={`${device.paired ? '进入传输' : '连接'} ${device.name}`}
         onPress={() => onPress(device)}
         style={({pressed}) => [styles.actionButton, pressed && styles.actionButtonPressed]}>
-        <Text style={styles.actionButtonText}>{device.authorized ? '传输' : '连接'}</Text>
+        <Text style={styles.actionButtonText}>{device.paired ? '传输' : '连接'}</Text>
       </Pressable>
     </View>
   )
@@ -148,8 +152,13 @@ export default function FindDevice() {
   const theme = useTheme()
   const connectionSheetRef = useRef<ConnectionBottomSheetRef>(null)
   const discoveryServiceRef = useRef<DiscoveryService | null>(null)
-  const [devices, setDevices] = useState<Device[]>([])
+  const [discoveredDevices, setDiscoveredDevices] = useState<Device[]>([])
+  const [pendingPairDevice, setPendingPairDevice] = useState<Device | null>(null)
+  const [pairingError, setPairingError] = useState<string | null>(null)
   const router = useRouter()
+  const trustedDevices = useTrustedDevicesStore((state) => state.devices)
+  const loadTrustedDevices = useTrustedDevicesStore((state) => state.load)
+  const saveTrustedDevice = useTrustedDevicesStore((state) => state.save)
   const {
     isLocationPermissionGranted,
     openLocationPermissionSettings,
@@ -158,8 +167,21 @@ export default function FindDevice() {
   const hasDiscoveryPermission = Platform.OS === 'ios' || (
     Platform.OS === 'android' && isLocationPermissionGranted
   )
+  const trustedDevicesById = useMemo(
+    () => new Map(trustedDevices.map((device) => [device.deviceId, device])),
+    [trustedDevices]
+  )
+  const devices = useMemo(() => (
+    discoveredDevices.map((device) => ({
+      ...device,
+      paired: trustedDevicesById.has(device.id)
+    }))
+  ), [discoveredDevices, trustedDevicesById])
+
   const handleDevicePress = useCallback((device: Device) => {
-    if (!device.authorized) {
+    if (!device.paired) {
+      setPairingError(null)
+      setPendingPairDevice(device)
       connectionSheetRef.current?.present()
       return
     }
@@ -167,18 +189,55 @@ export default function FindDevice() {
     router.push({
       pathname: '/transmission',
       params: {
-        authorized: device.authorized ? 'true' : 'false',
+        controlPort: device.controlPort?.toString(),
         id: device.id,
         ip: device.ip,
         name: device.name,
+        paired: device.paired ? 'true' : 'false',
         type: device.type
       }
     })
   }, [router])
 
-  const handleConfirmConnection = useCallback((_code: string) => {
-    connectionSheetRef.current?.dismiss()
-  }, [])
+  const handleConfirmConnection = useCallback(async (code: string) => {
+    const peer = pendingPairDevice
+    const localDeviceId = discoveryServiceRef.current?.deviceId
+    if (!peer || !localDeviceId) {
+      setPairingError('设备发现尚未完成，请稍后重试。')
+      return false
+    }
+
+    try {
+      const deviceName = ExpoDevice.deviceName?.trim() || ExpoDevice.modelName?.trim() || 'FlowDrop Mobile'
+      await verifyPairingCode(peer, {
+        code,
+        deviceId: localDeviceId,
+        deviceKind: 'mobile',
+        deviceName
+      })
+
+      const now = Date.now()
+      const existingDevice = trustedDevicesById.get(peer.id)
+      saveTrustedDevice(toTrustedDevice(peer, existingDevice, now))
+      setPendingPairDevice(null)
+      connectionSheetRef.current?.dismiss()
+      router.push({
+        pathname: '/transmission',
+        params: {
+          controlPort: peer.controlPort?.toString(),
+          id: peer.id,
+          ip: peer.ip,
+          name: peer.name,
+          paired: 'true',
+          type: peer.type
+        }
+      })
+      return true
+    } catch (error) {
+      setPairingError(getPairingErrorMessage(error))
+      return false
+    }
+  }, [pendingPairDevice, router, saveTrustedDevice, trustedDevicesById])
 
   const renderDevice = useCallback(({item}: { item: Device }) => (
     <DeviceCard device={item} onPress={handleDevicePress}/>
@@ -190,8 +249,12 @@ export default function FindDevice() {
   }, [requestAccessFineLocationPermissionIfNeeded])
 
   useEffect(() => {
+    loadTrustedDevices()
+  }, [loadTrustedDevices])
+
+  useEffect(() => {
     if (!hasDiscoveryPermission) {
-      setDevices([])
+      setDiscoveredDevices([])
       return
     }
 
@@ -216,18 +279,20 @@ export default function FindDevice() {
       discoveryService = service
       discoveryServiceRef.current = service
       unsubscribe = service.subscribe((event) => {
+        if (disposed) return
+
         if (event.type === 'error') {
           console.warn('Local network discovery failed.', event.error)
           return
         }
 
         if (event.type === 'deviceLost') {
-          setDevices((currentDevices) => currentDevices.filter((device) => device.id !== event.device.deviceId))
+          setDiscoveredDevices((currentDevices) => currentDevices.filter((device) => device.id !== event.device.deviceId))
           return
         }
 
         const nextDevice = toDevice(event.device)
-        setDevices((currentDevices) => {
+        setDiscoveredDevices((currentDevices) => {
           const deviceIndex = currentDevices.findIndex((device) => device.id === nextDevice.id)
           if (deviceIndex === -1) return sortDevices([...currentDevices, nextDevice])
 
@@ -239,7 +304,7 @@ export default function FindDevice() {
 
       await service.start()
       if (discoveryServiceRef.current === service) {
-        setDevices(sortDevices(service.getDiscoveredDevices().map(toDevice)))
+        setDiscoveredDevices(sortDevices(service.getDiscoveredDevices().map(toDevice)))
       }
     }
 
@@ -286,12 +351,54 @@ export default function FindDevice() {
         ref={connectionSheetRef}
         onConfirm={handleConfirmConnection}
       />
+
+      <BasicAlertDialog
+        confirmText="知道了"
+        message={pairingError ?? ''}
+        onConfirm={() => setPairingError(null)}
+        title="配对失败"
+        visible={pairingError !== null}
+      />
     </View>
   )
 }
 
 function DeviceSeparator() {
   return <View style={styles.separator}/>
+}
+
+function getPairingErrorMessage(error: unknown): string {
+  if (error instanceof PairingError) {
+    if (error.code === 'PAIRING_REJECTED') {
+      return '对方拒绝了此次配对请求。'
+    }
+    if (error.code === 'PAIRING_APPROVAL_EXPIRED') {
+      return '等待对方确认超时，请重新发起配对。'
+    }
+    return '配对码无效、已过期，或已达到尝试次数上限。'
+  }
+
+  const message = error instanceof Error ? error.message : ''
+
+  if (message.includes('Failed to connect') || message.includes('ConnectException')) {
+    return '无法连接目标设备。请确认电脑端 Agent 已启动，并允许局域网设备访问。'
+  }
+
+  return '无法完成配对，请确认目标设备在线后重试。'
+}
+
+function toTrustedDevice(device: Device, existingDevice: TrustedDevice | undefined, now: number): TrustedDevice {
+  return {
+    controlPort: device.controlPort,
+    deviceId: device.id,
+    deviceKind: device.type,
+    deviceName: device.name,
+    lastKnownAddress: device.ip,
+    lastSeenAt: now,
+    pairedAt: existingDevice?.pairedAt ?? now,
+    receiveEnabled: existingDevice?.receiveEnabled ?? true,
+    updatedAt: now
+  }
 }
 
 function EmptyDeviceList() {

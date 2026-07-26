@@ -3,14 +3,24 @@ import fp from 'fastify-plugin'
 import {DiscoveryBroadcaster} from '../network/discoveryBroadcaster'
 
 
+declare module 'fastify' {
+  interface FastifyInstance {
+    discoveryBroadcaster: DiscoveryBroadcaster
+  }
+}
+
 export const discoveryPlugin = fp(async (fastify) => {
   const broadcaster = new DiscoveryBroadcaster({
     onDiscoveryEvent: (event) => {
-      if (event.type === 'error') return
-      fastify.log.info({device: event.device}, `UDP discovery ${event.type}`)
+      fastify.agentEventBus.publish({
+        payload: event,
+        type: 'device.changed'
+      })
     },
     onError: (error) => fastify.log.error({err: error}, 'UDP discovery broadcaster error')
   })
+
+  fastify.decorate('discoveryBroadcaster', broadcaster)
 
   fastify.addHook('onReady', async () => {
     try {

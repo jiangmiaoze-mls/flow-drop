@@ -47,7 +47,7 @@ export type ConnectionBottomSheetRef = {
 
 type ConnectionBottomSheetProps = {
   initialCode?: string
-  onConfirm?: (code: string) => void
+  onConfirm?: (code: string) => boolean | Promise<boolean>
 }
 
 const ConnectionBottomSheet = forwardRef<ConnectionBottomSheetRef, ConnectionBottomSheetProps>(
@@ -73,6 +73,7 @@ const ConnectionBottomSheet = forwardRef<ConnectionBottomSheetRef, ConnectionBot
     const [isPagerTransitioning, setIsPagerTransitioning] = useState(false)
     const [isScannerPageVisible, setIsScannerPageVisible] = useState(false)
     const [isPresented, setIsPresented] = useState(false)
+    const [isSubmitting, setIsSubmitting] = useState(false)
 
     const [digits, setDigits] = useState(() => {
       const initialDigits = initialCode.replace(/\D/g, '').slice(0, CODE_LENGTH)
@@ -181,6 +182,7 @@ const ConnectionBottomSheet = forwardRef<ConnectionBottomSheetRef, ConnectionBot
 
     const handleDismiss = useCallback(() => {
       setIsPresented(false)
+      setIsSubmitting(false)
       resetPager()
 
       const pendingFlow = pendingCameraPermissionFlow.current
@@ -333,11 +335,32 @@ const ConnectionBottomSheet = forwardRef<ConnectionBottomSheetRef, ConnectionBot
       setSelectedIndex(deleteIndex)
     }, [digits, selectedIndex])
 
+    const submitPairingCode = useCallback(async (code: string) => {
+      if (isSubmitting || !onConfirm) return
+
+      const pairingCode = code.replace(/\D/g, '').slice(0, CODE_LENGTH)
+      if (pairingCode.length !== CODE_LENGTH) {
+        return
+      }
+
+      setIsSubmitting(true)
+      try {
+        const isPaired = await onConfirm(pairingCode)
+        if (isPaired) return
+
+        hasConfirmedScan.current = false
+      } catch {
+        hasConfirmedScan.current = false
+      } finally {
+        setIsSubmitting(false)
+      }
+    }, [isSubmitting, onConfirm])
+
     const handleBarcodeScanned = useCallback(({data}: BarcodeScanningResult) => {
       if (!data || !onConfirm || hasConfirmedScan.current) return
       hasConfirmedScan.current = true
-      onConfirm(data)
-    }, [onConfirm])
+      void submitPairingCode(data)
+    }, [onConfirm, submitPairingCode])
 
     return (
       <BottomSheetModal
@@ -445,13 +468,13 @@ const ConnectionBottomSheet = forwardRef<ConnectionBottomSheetRef, ConnectionBot
                   </View>
 
                   <Pressable
-                    accessibilityState={{disabled: !isCodeComplete}}
+                    accessibilityState={{disabled: !isCodeComplete || isSubmitting}}
                     accessibilityRole="button"
-                    disabled={!isCodeComplete}
-                    onPress={() => onConfirm?.(digits.join(''))}
+                    disabled={!isCodeComplete || isSubmitting}
+                    onPress={() => void submitPairingCode(digits.join(''))}
                     style={({pressed}) => [
                       styles.confirmButton,
-                      !isCodeComplete && {
+                      (!isCodeComplete || isSubmitting) && {
                         backgroundColor: theme.backgroundSelected
                       },
                       pressed && styles.confirmButtonPressed
@@ -461,7 +484,7 @@ const ConnectionBottomSheet = forwardRef<ConnectionBottomSheetRef, ConnectionBot
                         styles.confirmText,
                         !isCodeComplete && {color: theme.textSecondary}
                       ]}>
-                      确定
+                      {isSubmitting ? '配对中...' : '确定'}
                     </Text>
                   </Pressable>
                 </View>
@@ -497,6 +520,16 @@ const ConnectionBottomSheet = forwardRef<ConnectionBottomSheetRef, ConnectionBot
                           </Animated.View>
                         </View>
                       </View>
+                      {isSubmitting ? (
+                        <View
+                          accessibilityLabel="已识别二维码，正在配对"
+                          accessibilityRole="progressbar"
+                          style={styles.scanSubmittingOverlay}>
+                          <ActivityIndicator color="#FFFFFF" size="large"/>
+                          <Text style={styles.scanSubmittingTitle}>已识别二维码</Text>
+                          <Text style={styles.scanSubmittingMessage}>正在与设备建立配对...</Text>
+                        </View>
+                      ) : null}
                     </View>
                   ) : shouldShowCameraPermissionGuide ? (
                     <CameraPermissionContent onAuthorize={handleAuthorizeCamera}/>
@@ -732,6 +765,25 @@ const styles = StyleSheet.create({
     ...StyleSheet.absoluteFill,
     alignItems: 'center',
     justifyContent: 'center'
+  },
+  scanSubmittingOverlay: {
+    ...StyleSheet.absoluteFill,
+    alignItems: 'center',
+    backgroundColor: 'rgba(0, 0, 0, 0.72)',
+    justifyContent: 'center',
+    paddingHorizontal: 24
+  },
+  scanSubmittingTitle: {
+    color: '#FFFFFF',
+    fontSize: 18,
+    fontWeight: '700',
+    marginTop: 18
+  },
+  scanSubmittingMessage: {
+    color: 'rgba(255, 255, 255, 0.78)',
+    fontSize: 14,
+    marginTop: 8,
+    textAlign: 'center'
   },
   scanFrame: {
     position: 'relative'

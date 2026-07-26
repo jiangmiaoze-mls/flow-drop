@@ -20,7 +20,7 @@ export type TextDeliveryBottomSheetRef = {
 }
 
 type TextDeliveryBottomSheetProps = {
-  onSubmit?: (text: string) => void
+  onSubmit?: (text: string) => boolean | Promise<boolean>
   targetName: string
 }
 
@@ -32,6 +32,7 @@ const TextDeliveryBottomSheet = forwardRef<
   const bottomSheetRef = useRef<BottomSheetModal>(null)
   const [text, setText] = useState('')
   const [isPresented, setIsPresented] = useState(false)
+  const [isSubmitting, setIsSubmitting] = useState(false)
   const canSubmit = text.trim().length > 0
 
   // 用于追踪键盘当前的可见状态
@@ -82,16 +83,23 @@ const TextDeliveryBottomSheet = forwardRef<
     setIsPresented(false)
   }, [])
 
-  const handleSubmit = useCallback(() => {
+  const handleSubmit = useCallback(async () => {
     const content = text.trim()
-    if (!content) {
+    if (!content || isSubmitting) {
       return
     }
 
-    onSubmit?.(content)
-    setText('')
-    dismiss()
-  }, [dismiss, onSubmit, text])
+    setIsSubmitting(true)
+    try {
+      const isAccepted = await onSubmit?.(content)
+      if (isAccepted === false) return
+
+      setText('')
+      dismiss()
+    } finally {
+      setIsSubmitting(false)
+    }
+  }, [dismiss, isSubmitting, onSubmit, text])
 
   const renderBackdrop = useCallback((props: BottomSheetBackdropProps) => (
     <BottomSheetBackdrop
@@ -161,25 +169,25 @@ const TextDeliveryBottomSheet = forwardRef<
           <Pressable
             accessibilityLabel={`立即投递文字至 ${targetName}`}
             accessibilityRole="button"
-            accessibilityState={{disabled: !canSubmit}}
-            disabled={!canSubmit}
-            onPress={handleSubmit}
+            accessibilityState={{disabled: !canSubmit || isSubmitting}}
+            disabled={!canSubmit || isSubmitting}
+            onPress={() => void handleSubmit()}
             style={({pressed}) => [
               styles.submitButton,
-              !canSubmit && {backgroundColor: theme.backgroundSelected},
+              (!canSubmit || isSubmitting) && {backgroundColor: theme.backgroundSelected},
               pressed && styles.submitButtonPressed
             ]}>
             <Text
               style={[
                 styles.submitText,
-                !canSubmit && {color: theme.textSecondary}
+                (!canSubmit || isSubmitting) && {color: theme.textSecondary}
               ]}>
-              立即投递
+              {isSubmitting ? '验证中...' : '立即投递'}
             </Text>
             <SymbolView
               name={{ios: 'paperplane.fill', android: 'send', web: 'send'}}
               size={17}
-              tintColor={canSubmit ? '#FFFFFF' : theme.textSecondary}
+              tintColor={canSubmit && !isSubmitting ? '#FFFFFF' : theme.textSecondary}
             />
           </Pressable>
         </Pressable>

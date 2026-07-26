@@ -5,20 +5,25 @@ import {Pressable, ScrollView, StyleSheet, Text, View} from 'react-native'
 import {SafeAreaView} from 'react-native-safe-area-context'
 
 import {Header} from '@/components/Header'
+import {BasicAlertDialog} from '@/components/BasicAlertDialog'
 import TextDeliveryBottomSheet, {
   type TextDeliveryBottomSheetRef,
 } from '@/components/TextDeliveryBottomSheet'
 import {PAGE_HORIZONTAL_PADDING} from '@/constants/layout'
 import {useTheme} from '@/hooks/use-theme'
+import {getDeviceId} from '@/network/discoveryService'
+import {requestTransferAdmission, TransferAdmissionError} from '@/network/transferAdmissionClient'
+import type {Device} from '@flowdrop/types'
 import * as DocumentPicker from 'expo-document-picker'
 
 
 type TransmissionParams = {
-  authorized?: string
+  controlPort?: string
   id?: string
   ip?: string
   name?: string
-  type?: 'desktop' | 'laptop'
+  paired?: string
+  type?: 'desktop' | 'laptop' | 'mobile'
 }
 
 const TRANSFER_PROGRESS = 24.5 / 128
@@ -29,9 +34,11 @@ export default function Transmission() {
   const textDeliveryBottomSheetRef = useRef<TextDeliveryBottomSheetRef>(null)
   const params = useLocalSearchParams<TransmissionParams>()
   const [isQueuedItemVisible, setIsQueuedItemVisible] = useState(true)
+  const [isCheckingPermission, setIsCheckingPermission] = useState(false)
+  const [transferError, setTransferError] = useState<string | null>(null)
   const deviceName = params.name || '未知设备'
   const deviceIp = params.ip || '--'
-  const isAuthorized = params.authorized === 'true'
+  const isPaired = params.paired === 'true'
   const deviceIcon = params.type === 'desktop'
     ? {ios: 'desktopcomputer' as const, android: 'desktop_windows' as const, web: 'desktop_windows' as const}
     : {ios: 'laptopcomputer' as const, android: 'laptop_mac' as const, web: 'laptop_mac' as const}
@@ -49,7 +56,37 @@ export default function Transmission() {
     textDeliveryBottomSheetRef.current?.present()
   }, [])
 
-  const chooseFile = async () => {
+  const verifyTargetAllowsTransfer = useCallback(async (): Promise<boolean> => {
+    const controlPort = Number(params.controlPort)
+    if (!params.id || !params.ip || !params.type || !Number.isInteger(controlPort) || controlPort < 1 || controlPort > 65_535) {
+      setTransferError('当前设备未提供可用的传输服务，请返回设备列表后重试。')
+      return false
+    }
+
+    const peer: Device = {
+      controlPort,
+      id: params.id,
+      ip: params.ip,
+      name: deviceName,
+      paired: isPaired,
+      type: params.type
+    }
+
+    setIsCheckingPermission(true)
+    try {
+      await requestTransferAdmission(peer, await getDeviceId())
+      return true
+    } catch (error) {
+      setTransferError(getTransferErrorMessage(error))
+      return false
+    } finally {
+      setIsCheckingPermission(false)
+    }
+  }, [deviceName, isPaired, params.controlPort, params.id, params.ip, params.type])
+
+  const chooseFile = useCallback(async () => {
+    if (!await verifyTargetAllowsTransfer()) return
+
     const result = await DocumentPicker.getDocumentAsync({
       multiple: true
     })
@@ -57,9 +94,12 @@ export default function Transmission() {
     if (result.canceled) return
 
     for (let asset of result.assets) {
-      console.log(asset)
     }
-  }
+  }, [verifyTargetAllowsTransfer])
+
+  const handleTextDelivery = useCallback(async (_text: string): Promise<boolean> => {
+    return verifyTargetAllowsTransfer()
+  }, [verifyTargetAllowsTransfer])
 
   return (
     <SafeAreaView
@@ -104,7 +144,7 @@ export default function Transmission() {
 
           <View style={styles.statusRow}>
             <View style={styles.onlineDot}/>
-            <Text style={[styles.statusText, {color: theme.text}]}>在线 / {isAuthorized ? '已授权' : '未授权'}</Text>
+            <Text style={[styles.statusText, {color: theme.text}]}>在线 / {isPaired ? '已配对' : '未配对'}</Text>
           </View>
 
           <View style={[styles.ipBadge, {backgroundColor: theme.backgroundElement}]}>
@@ -116,24 +156,28 @@ export default function Transmission() {
           <Pressable
             accessibilityLabel="投递文件"
             accessibilityRole="button"
+            accessibilityState={{disabled: isCheckingPermission}}
+            disabled={isCheckingPermission}
             style={({pressed}) => [
               styles.actionCard,
               styles.primaryAction,
               pressed && styles.actionPressed
             ]}
-            onPress={() => chooseFile()}
+            onPress={() => void chooseFile()}
           >
             <SymbolView
               name={{ios: 'doc.badge.arrow.up', android: 'upload_file', web: 'upload_file'}}
               size={42}
               tintColor="#FFFFFF"
             />
-            <Text style={styles.primaryActionText}>投递文件</Text>
+            <Text style={styles.primaryActionText}>{isCheckingPermission ? '验证中...' : '投递文件'}</Text>
           </Pressable>
 
           <Pressable
             accessibilityLabel="投递文字"
             accessibilityRole="button"
+            accessibilityState={{disabled: isCheckingPermission}}
+            disabled={isCheckingPermission}
             onPress={handleOpenTextDelivery}
             style={({pressed}) => [
               styles.actionCard,
@@ -145,7 +189,7 @@ export default function Transmission() {
               size={42}
               tintColor={theme.text}
             />
-            <Text style={[styles.secondaryActionText, {color: theme.text}]}>投递文字</Text>
+            <Text style={[styles.secondaryActionText, {color: theme.text}]}>{isCheckingPermission ? '验证中...' : '投递文字'}</Text>
           </Pressable>
         </View>
 
@@ -218,10 +262,32 @@ export default function Transmission() {
 
       <TextDeliveryBottomSheet
         ref={textDeliveryBottomSheetRef}
+        onSubmit={handleTextDelivery}
         targetName={deviceName}
+      />
+
+      <BasicAlertDialog
+        message={transferError ?? ''}
+        onConfirm={() => setTransferError(null)}
+        title="无法投递"
+        visible={transferError !== null}
       />
     </SafeAreaView>
   )
+}
+
+function getTransferErrorMessage(error: unknown): string {
+  if (error instanceof TransferAdmissionError) {
+    if (error.code === 'TRANSFER_RECEIVE_DISABLED') {
+      return '对方当前不接受来自此设备的传输。'
+    }
+    if (error.code === 'DEVICE_NOT_PAIRED') {
+      return '对方未保存此设备的配对关系，请重新配对。'
+    }
+    return '对方未提供可用的传输服务。'
+  }
+
+  return '无法连接对方设备，请确认设备在线且处于同一局域网。'
 }
 
 const styles = StyleSheet.create({

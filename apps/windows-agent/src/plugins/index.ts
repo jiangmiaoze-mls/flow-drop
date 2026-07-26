@@ -1,3 +1,6 @@
 export * from './discovery'
+export * from './pairing'
+export * from './peerWebSocket'
+export * from './realtime'
 export * from './sensible'
 export * from './static'

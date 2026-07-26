@@ -2,7 +2,7 @@ import {createSocket, type RemoteInfo, type Socket} from 'node:dgram'
 import os from 'node:os'
 import {machineId} from 'node-machine-id'
 
-import {DISCOVERY_BROADCAST_ADDRESS, DISCOVERY_PORT} from '@flowdrop/config'
+import {DISCOVERY_BROADCAST_ADDRESS, DISCOVERY_PORT, PAIRING_CONTROL_PORT} from '@flowdrop/config'
 import {getIPv4BroadcastTargets} from '@flowdrop/network'
 import type {DiscoveryAnnouncement, DiscoveryEvent, DiscoveredDevice} from '@flowdrop/types'
 
@@ -140,15 +140,6 @@ export class DiscoveryBroadcaster {
   private announce(): void {
     if (!this.running || !this.socket || !this.deviceIdValue) return
 
-    const announcement: DiscoveryAnnouncement = {
-      deviceId: this.deviceIdValue,
-      deviceName: this.deviceName,
-      protocol: PROTOCOL,
-      type: 'announce',
-      version: PROTOCOL_VERSION
-    }
-
-    const message = JSON.stringify(announcement)
     const directedBroadcastAddresses = getIPv4BroadcastTargets()
       .map((target) => target.broadcastAddress)
     const broadcastAddresses = directedBroadcastAddresses.length > 0
@@ -156,13 +147,29 @@ export class DiscoveryBroadcaster {
       : [this.broadcastAddress]
 
     for (const broadcastAddress of broadcastAddresses) {
-      try {
-        this.socket.send(message, this.port, broadcastAddress, (error) => {
-          if (error) this.onError(error)
-        })
-      } catch (error) {
-        this.onError(toError(error))
-      }
+      this.sendAnnouncement(broadcastAddress, this.port)
+    }
+  }
+
+  private sendAnnouncement(address: string, port: number): void {
+    if (!this.socket || !this.deviceIdValue) return
+
+    const announcement: DiscoveryAnnouncement = {
+      controlPort: PAIRING_CONTROL_PORT,
+      deviceId: this.deviceIdValue,
+      deviceName: this.deviceName,
+      pairingAvailable: true,
+      protocol: PROTOCOL,
+      type: 'announce',
+      version: PROTOCOL_VERSION
+    }
+
+    try {
+      this.socket.send(JSON.stringify(announcement), port, address, (error) => {
+        if (error) this.onError(error)
+      })
+    } catch (error) {
+      this.onError(toError(error))
     }
   }
 
@@ -172,8 +179,15 @@ export class DiscoveryBroadcaster {
     const announcement = parseAnnouncement(message)
     if (!announcement || announcement.deviceId === this.deviceIdValue) return
 
+    // A unicast response avoids depending solely on Wi-Fi broadcast delivery
+    // after the Agent has already received a mobile discovery announcement.
+    if (!announcement.pairingAvailable) {
+      this.sendAnnouncement(remote.address, remote.port)
+    }
+
     const device: DiscoveredDevice = {
       address: remote.address,
+      controlPort: announcement.controlPort,
       deviceId: announcement.deviceId,
       deviceName: announcement.deviceName,
       lastSeenAt: Date.now(),
@@ -188,6 +202,7 @@ export class DiscoveryBroadcaster {
     }
     if (
       previous.address !== device.address ||
+      previous.controlPort !== device.controlPort ||
       previous.deviceName !== device.deviceName ||
       previous.port !== device.port
     ) {
