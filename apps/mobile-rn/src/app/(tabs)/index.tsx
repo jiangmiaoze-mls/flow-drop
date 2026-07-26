@@ -1,14 +1,16 @@
+import * as ExpoDevice from 'expo-device'
 import {useRouter} from 'expo-router'
 import {SymbolView} from 'expo-symbols'
 import {useCallback, useEffect, useRef} from 'react'
-import {FlatList, Pressable, StyleSheet, Text, View} from 'react-native'
+import {FlatList, Platform, Pressable, StyleSheet, Text, View} from 'react-native'
 
 import ConnectionBottomSheet, {type ConnectionBottomSheetRef} from '@/components/ConnectionBottomSheet'
 import {DiscoveryPulse} from '@/components/DiscoveryPulse'
 import {Header} from '@/components/Header'
 import {PAGE_HORIZONTAL_PADDING} from '@/constants/layout'
 import {useTheme} from '@/hooks/use-theme'
-import type {Device} from '@/types/temp'
+import {DiscoveryService} from '@/network/discoveryService'
+import type {Device} from '@flowdrop/types'
 import {useAccessFineLocationPermission} from '@/hooks/usePermissions'
 
 
@@ -138,14 +140,16 @@ function DeviceCard({device, onPress}: DeviceCardProps) {
 export default function FindDevice() {
   const theme = useTheme()
   const connectionSheetRef = useRef<ConnectionBottomSheetRef>(null)
+  const discoveryServiceRef = useRef<DiscoveryService | null>(null)
   const router = useRouter()
   const {
     isLocationPermissionGranted,
     openLocationPermissionSettings,
     requestAccessFineLocationPermissionIfNeeded
   } = useAccessFineLocationPermission()
-  // const discoveryService = new DiscoveryService()
-
+  const hasDiscoveryPermission = Platform.OS === 'ios' || (
+    Platform.OS === 'android' && isLocationPermissionGranted
+  )
   const handleDevicePress = useCallback((device: Device) => {
     if (!device.authorized) {
       connectionSheetRef.current?.present()
@@ -173,8 +177,30 @@ export default function FindDevice() {
   ), [handleDevicePress])
 
   useEffect(() => {
+    if (Platform.OS !== 'android') return
     void requestAccessFineLocationPermissionIfNeeded()
   }, [requestAccessFineLocationPermissionIfNeeded])
+
+  useEffect(() => {
+    if (!hasDiscoveryPermission) return
+
+    const deviceName = ExpoDevice.deviceName?.trim() || ExpoDevice.modelName?.trim() || 'FlowDrop Mobile'
+    const discoveryService = new DiscoveryService(deviceName)
+    discoveryServiceRef.current = discoveryService
+
+    void discoveryService.start().catch((error: unknown) => {
+      if (discoveryServiceRef.current === discoveryService) {
+        console.warn('Failed to start local network discovery.', error)
+      }
+    })
+
+    return () => {
+      if (discoveryServiceRef.current === discoveryService) {
+        discoveryServiceRef.current = null
+      }
+      discoveryService.stop()
+    }
+  }, [hasDiscoveryPermission])
 
   return (
     <View style={[styles.screen, {backgroundColor: theme.background}]}>
@@ -191,7 +217,7 @@ export default function FindDevice() {
         keyExtractor={(item) => item.id}
         ListHeaderComponent={(
           <HomeListHeader
-            hasLocationPermission={isLocationPermissionGranted}
+            hasLocationPermission={hasDiscoveryPermission}
             onOpenLocationSettings={openLocationPermissionSettings}
           />
         )}

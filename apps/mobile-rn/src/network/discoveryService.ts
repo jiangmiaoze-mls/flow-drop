@@ -2,6 +2,13 @@ import * as Application from 'expo-application'
 import * as Crypto from 'expo-crypto'
 import * as SecureStore from 'expo-secure-store'
 import {DISCOVERY_BROADCAST_ADDRESS, DISCOVERY_PORT} from '@flowdrop/config'
+import type {
+  DiscoveryAnnouncement,
+  DiscoveryEvent,
+  DiscoveryEventListener,
+  DiscoveryServiceOptions,
+  DiscoveredDevice,
+} from '@flowdrop/types'
 import dgram, {type RemoteInfo, type Socket} from 'react-native-udp'
 import {Platform} from 'react-native'
 
@@ -17,36 +24,13 @@ const MAX_DEVICE_NAME_LENGTH = 128
 
 let iosDeviceIdPromise: Promise<string> | null = null
 
-type DiscoveryAnnouncement = {
-  deviceId: string
-  deviceName: string
-  protocol: typeof PROTOCOL
-  type: 'announce'
-  version: typeof PROTOCOL_VERSION
-}
-
-export type DiscoveredDevice = {
-  address: string
-  deviceId: string
-  deviceName: string
-  lastSeenAt: number
-  port: number
-}
-
-export type DiscoveryEvent =
-  | { type: 'deviceFound'; device: DiscoveredDevice }
-  | { type: 'deviceUpdated'; device: DiscoveredDevice }
-  | { type: 'deviceLost'; device: DiscoveredDevice }
-  | { type: 'error'; error: Error }
-
-export type DiscoveryEventListener = (event: DiscoveryEvent) => void
-
-export type DiscoveryServiceOptions = {
-  announceIntervalMs?: number
-  broadcastAddress?: string
-  deviceTtlMs?: number
-  port?: number
-}
+export type {
+  DiscoveryAnnouncement,
+  DiscoveryEvent,
+  DiscoveryEventListener,
+  DiscoveryServiceOptions,
+  DiscoveredDevice,
+} from '@flowdrop/types'
 
 /**
  * Discovers nearby FlowDrop peers over IPv4 broadcast.

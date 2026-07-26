@@ -1,6 +1,7 @@
 import {SymbolView, type SymbolViewProps} from 'expo-symbols'
 import {forwardRef, ReactNode, useCallback, useImperativeHandle, useRef, useState} from 'react'
 import {Pressable, StyleSheet, Text, View} from 'react-native'
+import type {TransmissionRecordDetail} from '@flowdrop/types'
 
 import {
   TRANSMISSION_RECORD_FILE_TYPE_ICONS,
@@ -10,9 +11,6 @@ import BottomSheet, {type BottomSheetRef} from '@/components/ui/BottomSheet'
 import {PAGE_HORIZONTAL_PADDING} from '@/constants/layout'
 import {useTheme} from '@/hooks/use-theme'
 
-
-type TransmissionDirection = 'receive' | 'send'
-type TransmissionStatus = 'interrupted' | 'success'
 
 const PHONE_ICON: SymbolViewProps['name'] = {
   ios: 'iphone',
@@ -26,16 +24,7 @@ const LAPTOP_ICON: SymbolViewProps['name'] = {
   web: 'laptop_mac'
 }
 
-export type TransmissionRecordDetail = {
-  dateLabel: string
-  detail: string
-  direction: TransmissionDirection
-  fileType: TransmissionRecordFileType
-  id: string
-  name: string
-  status: TransmissionStatus
-  time: string
-}
+export type {TransmissionRecordDetail} from '@flowdrop/types'
 
 export type TransmissionRecordDetailBottomSheetRef = {
   dismiss: () => void

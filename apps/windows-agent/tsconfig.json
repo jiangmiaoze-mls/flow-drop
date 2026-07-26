@@ -23,7 +23,8 @@
     /* 模块解析 */
     "baseUrl": ".",
     "paths": {
-      "@flowdrop/config": ["../../packages/config"]
+      "@flowdrop/config": ["../../packages/config"],
+      "@flowdrop/types": ["../../packages/types"]
     },
     "moduleResolution": "node",
     "esModuleInterop": true,

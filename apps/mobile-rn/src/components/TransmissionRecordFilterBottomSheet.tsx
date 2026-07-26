@@ -1,21 +1,22 @@
 import {SymbolView, type SymbolViewProps} from 'expo-symbols'
 import {forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState} from 'react'
 import {Pressable, StyleSheet, Text, View} from 'react-native'
+import type {
+  TransmissionRecordFilter,
+  TransmissionRecordFileType,
+  TransmissionRecordFilterStatus,
+} from '@flowdrop/types'
 import BottomSheet, {type BottomSheetRef} from './ui/BottomSheet'
 import {PAGE_HORIZONTAL_PADDING} from '@/constants/layout'
 import {useTheme} from '@/hooks/use-theme'
 
 
-export type TransmissionRecordFileType = 'document' | 'image' | 'link' | 'text' | 'video'
 type FileType = 'all' | TransmissionRecordFileType
 type SelectableFileType = TransmissionRecordFileType
-type TransferStatus = 'all' | 'failed' | 'success'
+type TransferStatus = 'all' | TransmissionRecordFilterStatus
 type SelectableTransferStatus = Exclude<TransferStatus, 'all'>
 
-export type TransmissionRecordFilter = {
-  fileTypes: SelectableFileType[]
-  statuses: SelectableTransferStatus[]
-}
+export type {TransmissionRecordFilter, TransmissionRecordFileType} from '@flowdrop/types'
 
 export type TransmissionRecordFilterBottomSheetRef = {
   dismiss: () => void

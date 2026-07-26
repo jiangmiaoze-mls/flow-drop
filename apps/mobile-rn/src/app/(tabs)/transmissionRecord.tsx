@@ -17,32 +17,26 @@ import {
 
 import {Header} from '@/components/Header'
 import TransmissionRecordDetailBottomSheet, {
-  type TransmissionRecordDetail,
   type TransmissionRecordDetailBottomSheetRef
 } from '@/components/TransmissionRecordDetailBottomSheet'
 import TransmissionRecordFilterBottomSheet, {
   TRANSMISSION_RECORD_FILE_TYPE_ICONS,
-  type TransmissionRecordFilter,
-  type TransmissionRecordFileType,
   type TransmissionRecordFilterBottomSheetRef
 } from '@/components/TransmissionRecordFilterBottomSheet'
 import {PAGE_HORIZONTAL_PADDING} from '@/constants/layout'
 import {useTheme} from '@/hooks/use-theme'
+import type {
+  TransferDirection,
+  TransferRecord,
+  TransmissionRecordDetail,
+  TransmissionRecordFileType,
+  TransmissionRecordFilter,
+  TransmissionRecordStatus,
+} from '@flowdrop/types'
 
 
-type RecordStatus = 'success' | 'interrupted'
+type RecordStatus = TransmissionRecordStatus
 type RecordFileType = TransmissionRecordFileType
-type TransferDirection = 'receive' | 'send'
-
-type TransferRecord = {
-  detail: string
-  direction?: TransferDirection
-  fileType?: RecordFileType
-  id: string
-  name: string
-  status: RecordStatus
-  time: string
-}
 
 type RecordSection = {
   data: TransferRecord[]

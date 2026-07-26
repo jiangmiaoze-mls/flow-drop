@@ -66,6 +66,9 @@ importers:
       '@flowdrop/config':
         specifier: workspace:*
         version: link:../../packages/config
+      '@flowdrop/types':
+        specifier: workspace:*
+        version: link:../../packages/types
       '@gorhom/bottom-sheet':
         specifier: ^5.2.14
         version: 5.2.14(6e44dcb7dcfecf271936e923703300f2)
@@ -190,6 +193,9 @@ importers:
       '@flowdrop/config':
         specifier: workspace:*
         version: link:../../packages/config
+      '@flowdrop/types':
+        specifier: workspace:*
+        version: link:../../packages/types
       fastify:
         specifier: ^5.0.0
         version: 5.10.0
@@ -220,6 +226,8 @@ importers:
         version: 5.9.3
 
   packages/config: {}
+
+  packages/types: {}
 
 packages:
 
