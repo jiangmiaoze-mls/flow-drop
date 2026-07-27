@@ -9,6 +9,8 @@
   },
   "scripts": {
     "test": "npm run build:ts && tsc -p test/tsconfig.json && c8 node --test -r ts-node/register \"test/**/*.ts\"",
+    "migrate:v3:up": "npm run build:ts && node dist/transfers/v3MigrationCli.js up",
+    "migrate:v3:down": "npm run build:ts && node dist/transfers/v3MigrationCli.js down",
     "start": "npm run build:ts && fastify start -a 0.0.0.0 -l info dist/app.js",
     "build:ts": "tsc",
     "watch:ts": "tsc -w",
@@ -19,7 +21,7 @@
   "author": "",
   "license": "ISC",
   "engines": {
-    "node": ">=22.5.0"
+    "node": ">=22.12.0"
   },
   "dependencies": {
     "@fastify/autoload": "^6.0.0",

@@ -20,9 +20,13 @@ type TrustedDeviceRow = {
 }
 
 export class TrustedDeviceStore {
+  readonly databasePath: string
   private readonly database: DatabaseSync
+  private readonly devicesById = new Map<string, TrustedDevice>()
+  private readonly transferSecretsByDeviceId = new Map<string, string>()
 
   constructor(databasePath = getDefaultDatabasePath()) {
+    this.databasePath = databasePath
     mkdirSync(path.dirname(databasePath), {recursive: true})
     this.database = new DatabaseSync(databasePath)
     this.database.exec('PRAGMA journal_mode = WAL')
@@ -48,6 +52,16 @@ export class TrustedDeviceStore {
     if (!columns.some((column) => column.name === 'receive_enabled')) {
       this.database.exec('ALTER TABLE trusted_devices ADD COLUMN receive_enabled INTEGER NOT NULL DEFAULT 1')
     }
+    const devices = this.database.prepare('SELECT * FROM trusted_devices').all() as TrustedDeviceRow[]
+    for (const row of devices) {
+      const device = toTrustedDevice(row)
+      this.devicesById.set(device.deviceId, device)
+    }
+    const credentials = this.database.prepare('SELECT device_id, secret FROM transfer_credentials').all() as Array<{
+      device_id: string
+      secret: string
+    }>
+    for (const credential of credentials) this.transferSecretsByDeviceId.set(credential.device_id, credential.secret)
   }
 
   close() {
@@ -57,28 +71,31 @@ export class TrustedDeviceStore {
   delete(deviceId: string) {
     this.database.prepare('DELETE FROM trusted_devices WHERE device_id = ?').run(deviceId)
     this.database.prepare('DELETE FROM transfer_credentials WHERE device_id = ?').run(deviceId)
+    this.devicesById.delete(deviceId)
+    this.transferSecretsByDeviceId.delete(deviceId)
   }
 
   get(deviceId: string): TrustedDevice | null {
-    const row = this.database
-      .prepare('SELECT * FROM trusted_devices WHERE device_id = ?')
-      .get(deviceId) as TrustedDeviceRow | undefined
-    return row ? toTrustedDevice(row) : null
+    const device = this.devicesById.get(deviceId)
+    return device ? {...device} : null
   }
 
   list(): TrustedDevice[] {
-    const rows = this.database
-      .prepare('SELECT * FROM trusted_devices ORDER BY device_name COLLATE NOCASE')
-      .all() as TrustedDeviceRow[]
-    return rows.map(toTrustedDevice)
+    return [...this.devicesById.values()]
+      .sort((left, right) => left.deviceName.localeCompare(right.deviceName, undefined, {sensitivity: 'base'}))
+      .map((device) => ({...device}))
   }
 
   setReceiveEnabled(deviceId: string, receiveEnabled: boolean): TrustedDevice | null {
+    const current = this.devicesById.get(deviceId)
+    if (!current) return null
     const now = Date.now()
     this.database
       .prepare('UPDATE trusted_devices SET receive_enabled = ?, updated_at = ? WHERE device_id = ?')
       .run(receiveEnabled ? 1 : 0, now, deviceId)
-    return this.get(deviceId)
+    const updated = {...current, receiveEnabled, updatedAt: now}
+    this.devicesById.set(deviceId, updated)
+    return {...updated}
   }
 
   createTransferSecret(deviceId: string): string {
@@ -93,12 +110,11 @@ export class TrustedDeviceStore {
       INSERT INTO transfer_credentials (device_id, secret, updated_at) VALUES (?, ?, ?)
       ON CONFLICT(device_id) DO UPDATE SET secret = excluded.secret, updated_at = excluded.updated_at
     `).run(deviceId, secret, Date.now())
+    this.transferSecretsByDeviceId.set(deviceId, secret)
   }
 
   getTransferSecret(deviceId: string): string | null {
-    const row = this.database.prepare('SELECT secret FROM transfer_credentials WHERE device_id = ?')
-      .get(deviceId) as {secret: string} | undefined
-    return row?.secret ?? null
+    return this.transferSecretsByDeviceId.get(deviceId) ?? null
   }
 
   upsert(device: TrustedDevice): TrustedDevice {
@@ -129,7 +145,9 @@ export class TrustedDeviceStore {
       device.updatedAt
     )
 
-    return this.get(device.deviceId) ?? device
+    const stored = {...device}
+    this.devicesById.set(device.deviceId, stored)
+    return {...stored}
   }
 }
 

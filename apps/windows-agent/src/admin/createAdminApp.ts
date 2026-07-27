@@ -5,6 +5,7 @@ import path from 'node:path'
 import type {AgentEvent, PairingApprovalStatusResponse} from '@flowdrop/types'
 import {LocalFileDemoStore, type LocalFileDemoDirection} from './localFileDemoStore'
 import {initiateMobilePairing} from '../pairing/mobilePairingInitiator'
+import '../transfers/v3Fastify'
 
 
 export function createAdminApp(peer: FastifyInstance): FastifyInstance {
@@ -31,7 +32,7 @@ export function createAdminApp(peer: FastifyInstance): FastifyInstance {
 
   admin.get('/api/trusted-devices', async () => ({devices: peer.trustedDeviceStore.list()}))
 
-  admin.get('/api/transfers', async () => ({transfers: peer.transferService.listIncomingTransfers()}))
+  admin.get('/api/transfers', async () => ({transfers: await peer.v3TransferService.listIncomingTransfersForAdmin()}))
 
   admin.get('/api/file-demo/transfers', async () => ({transfers: localFileDemoStore.list()}))
 

@@ -10,8 +10,14 @@ import {AppState, Modal, Platform, Pressable, StyleSheet, Text, View} from 'reac
 
 import {useTheme} from '@/hooks/use-theme'
 import {mobilePairingService, type MobilePairingRequest} from '@/network/mobilePairingService'
+import {
+  recoverPersistedNativeTransfers,
+  replayBufferedNativeTransferEvents,
+  startNativeTransferProjectionRuntime
+} from '@/network/nativeTransferProjectionRuntime'
 import {setTransferSecret} from '@/storage/transferCredentialRepository'
 import {useTrustedDevicesStore} from '@/store/useTrustedDevicesStore'
+import {useV3TransferProjectionStore} from '@/store/useV3TransferProjectionStore'
 
 
 void SplashScreen.preventAutoHideAsync()
@@ -58,6 +64,18 @@ export default function RootLayout() {
   const [isReady, setIsReady] = useState(false)
   const [incomingPairingRequest, setIncomingPairingRequest] = useState<MobilePairingRequest | null>(null)
   const {checkAccessFineLocationPermission} = useAccessFineLocationPermission()
+
+  useEffect(() => {
+    // This is intentionally root-scoped: the native controller survives a
+    // transmission screen navigation and its durable ACKs must not be lost.
+    startNativeTransferProjectionRuntime()
+    void useV3TransferProjectionStore.getState().hydrateAll()
+      .then(() => {
+        replayBufferedNativeTransferEvents()
+        return recoverPersistedNativeTransfers()
+      })
+      .catch((error) => console.warn('Unable to hydrate V3 transfer projections.', error))
+  }, [])
 
   useEffect(() => {
     let isActive = true

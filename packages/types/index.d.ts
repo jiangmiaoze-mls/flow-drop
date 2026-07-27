@@ -181,12 +181,21 @@ export type TransferItemDescriptor = {
   text?: string
 }
 
+export type DeferredFileTransferItemDescriptor = Omit<TransferItemDescriptor, 'kind' | 'sha256' | 'text'> & {
+  kind: 'file'
+  sha256?: string
+}
+
 export type CreateTransferRequest = {
   chunkSizeBytes?: number
-  items: TransferItemDescriptor[]
+  items: Array<TransferItemDescriptor | DeferredFileTransferItemDescriptor>
   sourceDeviceId: string
   transferId: string
-  v: 1
+  v: 1 | 2
+}
+
+export type CompleteTransferRequest = {
+  items: Array<{itemId: string; sha256: string}>
 }
 
 export type TransferItem = Omit<TransferItemDescriptor, 'text'> & {
@@ -207,7 +216,7 @@ export type TransferTask = {
   transferredBytes: number
   transferId: string
   updatedAt: number
-  v: 1
+  v: 1 | 2
 }
 
 export type TransferStatusResponse = {

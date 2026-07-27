@@ -27,8 +27,8 @@ import TransmissionRecordFilterBottomSheet, {
 } from '@/components/TransmissionRecordFilterBottomSheet'
 import {PAGE_HORIZONTAL_PADDING} from '@/constants/layout'
 import {useTheme} from '@/hooks/use-theme'
-import {listAllOutgoingTransfers, type OutgoingTransferItem} from '@/storage/outgoingTransferRepository'
 import {listTrustedDevices} from '@/storage/trustedDeviceRepository'
+import {listV3OutgoingTransfers, type V3OutgoingTransferTask} from '@/storage/v3TransferProjectionRepository'
 import type {
   TransferDirection,
   TransferRecord,
@@ -188,20 +188,35 @@ function getTransferDirection(record: TransferRecord): TransferDirection {
   return record.direction ?? 'send'
 }
 
-function listTransferRecords(): TransferRecord[] {
+async function listTransferRecords(): Promise<TransferRecord[]> {
   const deviceNames = new Map(listTrustedDevices().map((device) => [device.deviceId, device.deviceName]))
-  return listAllOutgoingTransfers().flatMap((task) => task.items.map((item) => ({
-    detail: getItemDetail(item),
+  const [v3Tasks] = await Promise.all([listV3OutgoingTransfers()])
+  const v3Records = v3Tasks.flatMap((task) => toV3TransferRecords(task, deviceNames))
+  return v3Records.sort((left, right) => (right.timestamp ?? 0) - (left.timestamp ?? 0))
+}
+
+function toV3TransferRecords(
+  task: V3OutgoingTransferTask,
+  deviceNames: Map<string, string>
+): TransferRecord[] {
+  return task.items.map((item) => ({
+    detail: formatBytes(item.sizeBytes),
     direction: 'send' as const,
-    fileType: getItemFileType(item),
+    fileType: getV3ItemFileType(item.mimeType, item.name),
     id: `${task.transferId}:${item.itemId}`,
-    name: getItemName(item),
+    name: item.name,
     peerDeviceName: deviceNames.get(task.peerDeviceId) ?? task.peerDeviceId,
     sourceUri: item.sourceUri,
-    status: task.status,
+    status: task.status === 'recovering' ? 'transferring' : task.status,
     time: formatTime(task.updatedAt),
     timestamp: task.updatedAt
-  })))
+  }))
+}
+
+function getV3ItemFileType(mimeType: string, name: string): RecordFileType {
+  if (mimeType.startsWith('image/') || /\.(heic|jpeg|jpg|png|webp)$/i.test(name)) return 'image'
+  if (mimeType.startsWith('video/') || /\.(mov|mp4|mkv|webm)$/i.test(name)) return 'video'
+  return 'document'
 }
 
 function buildDateSections(records: TransferRecord[]): RecordSection[] {
@@ -224,23 +239,6 @@ function buildDeviceSections(records: TransferRecord[]): RecordSection[] {
     groups.set(title, group)
   }
   return [...groups].map(([title, data]) => ({data, title}))
-}
-
-function getItemDetail(item: OutgoingTransferItem): string {
-  return item.kind === 'text' ? `文字 · ${formatBytes(item.sizeBytes)}` : formatBytes(item.sizeBytes)
-}
-
-function getItemFileType(item: OutgoingTransferItem): RecordFileType {
-  if (item.kind === 'text') return 'text'
-  if (item.mimeType.startsWith('image/') || /\.(heic|jpeg|jpg|png|webp)$/i.test(item.name)) return 'image'
-  if (item.mimeType.startsWith('video/') || /\.(mov|mp4|mkv|webm)$/i.test(item.name)) return 'video'
-  return 'document'
-}
-
-function getItemName(item: OutgoingTransferItem): string {
-  if (item.kind !== 'text') return item.name
-  const preview = item.text?.replace(/\s+/g, ' ').trim()
-  return preview ? preview.slice(0, 80) : item.name
 }
 
 function formatDateLabel(timestamp: number): string {
@@ -430,22 +428,21 @@ export default function TransmissionRecord() {
   const hasActiveFilter = filter.fileTypes.length > 0 || filter.statuses.length > 0
 
   const normalizedQuery = useMemo(() => query.trim().toLocaleLowerCase(), [query])
-  const refreshRecords = useCallback(() => {
-    setRecords(listTransferRecords())
+  const refreshRecords = useCallback(async () => {
+    setRecords(await listTransferRecords())
   }, [])
 
   const handleRefresh = useCallback(async () => {
     setIsRefreshing(true)
     try {
-      await new Promise<void>((resolve) => setTimeout(resolve, 0))
-      refreshRecords()
+      await refreshRecords()
     } finally {
       setIsRefreshing(false)
     }
   }, [refreshRecords])
 
   useFocusEffect(useCallback(() => {
-    refreshRecords()
+    void refreshRecords()
   }, [refreshRecords]))
 
   const allRecordSections = useMemo(() => buildDateSections(records), [records])

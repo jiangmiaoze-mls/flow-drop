@@ -3,30 +3,20 @@ package com.flowdrop.network
 import android.content.Context
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
-import android.net.Uri
 import android.net.wifi.WifiManager
 import expo.modules.kotlin.exception.Exceptions
 import expo.modules.kotlin.functions.Coroutine
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
-import java.io.File
 import java.net.Inet4Address
-import java.security.MessageDigest
 
 class FlowDropNetworkModule : Module() {
-  private companion object {
-    const val HASH_BUFFER_BYTES = 1024 * 1024
-    const val HASH_PROGRESS_STEP_BYTES = 4L * 1024 * 1024
-  }
-
   private val context: Context
     get() = appContext.reactContext ?: throw Exceptions.ReactContextLost()
 
   override fun definition() = ModuleDefinition {
     Name("FlowDropNetwork")
-    Events("sha256Progress")
+    Events("transferState", "transferProgress", "transferFailure", "transferChunkDigests")
 
     AsyncFunction("getWifiIPv4BroadcastTargetAsync") {
       val wifiManager = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
@@ -45,53 +35,44 @@ class FlowDropNetworkModule : Module() {
       getActiveWifiIpv4Target()
     }
 
-    AsyncFunction("sha256FileAsync") Coroutine { uriString: String, operationId: String ->
-      hashFile(uriString, operationId)
-    }
-  }
-
-  private suspend fun hashFile(uriString: String, operationId: String): Map<String, Any> = withContext(Dispatchers.IO) {
-    val uri = Uri.parse(uriString)
-    val totalBytes = getFileSize(uri)
-    val digest = MessageDigest.getInstance("SHA-256")
-    var processedBytes = 0L
-    var lastReportedBytes = 0L
-    val input = context.contentResolver.openInputStream(uri)
-      ?: throw IllegalArgumentException("Unable to read selected file")
-
-    input.use { stream ->
-      val buffer = ByteArray(HASH_BUFFER_BYTES)
-      while (true) {
-        val read = stream.read(buffer)
-        if (read < 0) break
-        if (read == 0) continue
-        digest.update(buffer, 0, read)
-        processedBytes += read
-        if (processedBytes - lastReportedBytes >= HASH_PROGRESS_STEP_BYTES) {
-          lastReportedBytes = processedBytes
-          sendEvent("sha256Progress", mapOf(
-            "operationId" to operationId,
-            "processedBytes" to processedBytes,
-            "totalBytes" to if (totalBytes >= 0) totalBytes else processedBytes
-          ))
-        }
-      }
+    AsyncFunction("startTransfer") Coroutine { config: Map<String, Any?> ->
+      transferController().start(NativeTransferConfig.fromMap(config))
     }
 
-    sendEvent("sha256Progress", mapOf(
-      "operationId" to operationId,
-      "processedBytes" to processedBytes,
-      "totalBytes" to processedBytes
-    ))
-    mapOf(
-      "sha256" to digest.digest().joinToString("") { byte -> "%02x".format(byte.toInt() and 0xff) },
-      "sizeBytes" to processedBytes
-    )
+    AsyncFunction("restartTransferForRecovery") Coroutine { config: Map<String, Any?> ->
+      transferController().restartForRecovery(NativeTransferConfig.fromMap(config))
+    }
+
+    AsyncFunction("reconcileCancelledTransfer") Coroutine { config: Map<String, Any?> ->
+      transferController().reconcileCancelledTransfer(NativeTransferConfig.fromMap(config))
+    }
+
+    AsyncFunction("retainTransferSourceUris") Coroutine { sourceUris: List<String> ->
+      transferController().retainSourceUriPermissions(sourceUris)
+    }
+
+    AsyncFunction("pauseTransfer") Coroutine { transferId: String ->
+      transferController().pause(transferId)
+    }
+
+    AsyncFunction("resumeTransfer") Coroutine { transferId: String ->
+      transferController().resume(transferId)
+    }
+
+    AsyncFunction("cancelTransfer") Coroutine { transferId: String ->
+      transferController().cancel(transferId)
+    }
+
+    AsyncFunction("getTransferSnapshot") { transferId: String ->
+      transferController().snapshot(transferId)
+    }
+
   }
 
-  private fun getFileSize(uri: Uri): Long {
-    if (uri.scheme == "file") return File(requireNotNull(uri.path)).length()
-    return context.contentResolver.openAssetFileDescriptor(uri, "r")?.use { descriptor -> descriptor.length } ?: -1L
+  private fun transferController(): TransferController {
+    return TransferControllerRegistry.get(context.applicationContext) { eventName, payload ->
+      sendEvent(eventName, payload)
+    }
   }
 
   private fun getActiveWifiIpv4Target(): Map<String, String>? {

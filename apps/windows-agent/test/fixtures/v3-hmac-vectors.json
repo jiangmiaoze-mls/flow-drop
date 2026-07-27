@@ -1,0 +1,37 @@
+{
+  "algorithm": "HMAC-SHA256",
+  "authorizationScheme": "FlowDrop-HMAC",
+  "encoding": "UTF-8",
+  "keyEncoding": "hex",
+  "pathSemantics": "full-request-target-including-query",
+  "chunkDigestsQueryOrder": ["offset", "limit"],
+  "secretHex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+  "timestamp": "1735689600123",
+  "nonce": "123e4567-e89b-12d3-a456-426614174000",
+  "cases": [
+    {
+      "name": "capabilities",
+      "method": "GET",
+      "path": "/v1/transport/capabilities",
+      "body": "",
+      "bodySha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "signature": "8f33109c0508e07deaf824e8dcbc23c16ab37232d71f5dbfd938c58fbccf455d"
+    },
+    {
+      "name": "create",
+      "method": "POST",
+      "path": "/v3/transfers",
+      "body": "{\"chunkSizeBytes\":1048576,\"items\":[{\"itemId\":\"00000000-0000-4000-8000-000000000002\",\"mimeType\":\"application/octet-stream\",\"name\":\"报告-€.bin\",\"sizeBytes\":3}],\"protocol\":3,\"sourceDeviceId\":\"android-01\",\"transferId\":\"00000000-0000-4000-8000-000000000001\"}",
+      "bodySha256": "67eeb73eb79631c0430e8caef1d49660deeb5d1b09f714263d524d28a30a7e12",
+      "signature": "e6ff9448037afe7f2577501baa38df06c904258130a7b323ea7bee0b3e7f6006"
+    },
+    {
+      "name": "chunk-digests-page-request-target",
+      "method": "GET",
+      "path": "/v3/transfers/00000000-0000-4000-8000-000000000001/items/00000000-0000-4000-8000-000000000002/chunk-digests?offset=0&limit=1000",
+      "body": "",
+      "bodySha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "signature": "0bf3813ce66a89bdc949fafc9fd5a99a57d0acea82c87e256a6c31b03325ce80"
+    }
+  ]
+}
