@@ -3,6 +3,7 @@ import test from 'node:test'
 
 import {
   createV3RequestSignature,
+  V3AuthenticationError,
   V3TransferAuthenticator
 } from '../src/transfers/v3TransferAuthenticator'
 
@@ -40,6 +41,23 @@ test('returns a retryable response when asynchronous credential access is unavai
   await assert.rejects(
     authenticator.authenticate(createAuthenticationInput('nonce-unavailable', Date.now())),
     (error: unknown) => isTransportError(error, 'AUTHENTICATION_UNAVAILABLE', 503)
+  )
+})
+
+test('identifies a signature mismatch internally without changing the V3 authentication response', async () => {
+  const authenticator = new V3TransferAuthenticator({
+    get: async () => ({receiveEnabled: true, transferSecret: SECRET})
+  })
+  const input = createAuthenticationInput('nonce-invalid-signature', Date.now())
+  const lastCharacter = input.authorization.charAt(input.authorization.length - 1)
+  input.authorization = `${input.authorization.slice(0, -1)}${lastCharacter === '0' ? '1' : '0'}`
+
+  await assert.rejects(
+    authenticator.authenticate(input),
+    (error: unknown) => error instanceof V3AuthenticationError
+      && error.code === 'AUTHENTICATION_REQUIRED'
+      && error.statusCode === 401
+      && error.reason === 'signature_mismatch'
   )
 })
 

@@ -4,6 +4,7 @@ import {
   CHUNK_DIGEST_MISMATCH,
   beginV3TransferPendingOperation,
   createV3OutgoingTransfer,
+  deleteV3OutgoingTransfer,
   enqueueV3ConfirmedChunkDigests,
   enqueueV3TransferProjectionUpdate,
   flushV3ConfirmedChunkDigests,
@@ -32,6 +33,7 @@ type V3TransferProjectionState = {
     optimisticStatus: Extract<V3TransferStatus, 'cancelled' | 'paused' | 'transferring'>
   ) => Promise<V3OutgoingTransferTask>
   createTransfer: (input: CreateV3OutgoingTransferInput) => Promise<V3OutgoingTransferTask>
+  deleteTransfer: (transferId: string) => Promise<void>
   flushPersistence: () => Promise<void>
   hydrateAll: () => Promise<void>
   hydratePeer: (peerDeviceId: string) => Promise<void>
@@ -142,6 +144,20 @@ export const useV3TransferProjectionStore = create<V3TransferProjectionState>((s
       }
     }))
     return task
+  },
+
+  deleteTransfer: async (transferId) => {
+    const task = get().tasksById[transferId]
+    if (!task) return
+    if (!isTerminalStatus(task.status)) throw new Error('TRANSFER_STATE_INVALID')
+
+    await deleteV3OutgoingTransfer(transferId)
+    set((state) => {
+      if (!state.tasksById[transferId]) return state
+      const tasksById = {...state.tasksById}
+      delete tasksById[transferId]
+      return {tasksById}
+    })
   },
 
   flushPersistence: async () => {

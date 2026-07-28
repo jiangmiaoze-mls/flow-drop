@@ -32,12 +32,14 @@ type BufferedNativeEvent =
   | {event: NativeTransferProgressEvent; kind: 'progress'}
   | {event: NativeTransferFailureEvent; kind: 'failure'}
   | {event: NativeTransferChunkDigestEvent; kind: 'digests'}
+type NativeTransferFailureObserver = (event: NativeTransferFailureEvent) => void
 
 const MAX_BUFFERED_EVENTS_PER_TRANSFER = 4_096
 const operationIds = new Map<string, string>()
 const pendingEventsByTransferId = new Map<string, BufferedNativeEvent[]>()
 const pendingNativeStarts = new Map<string, Promise<boolean>>()
 const restartingTransferIds = new Set<string>()
+const failureObservers = new Set<NativeTransferFailureObserver>()
 let isStarted = false
 let recoveryPromise: Promise<void> | null = null
 
@@ -75,6 +77,16 @@ export function projectNativeTransferSnapshot(snapshot: NativeTransferSnapshot):
   // an event; only an explicit native replacement response may register a new
   // operation id before calling this projector.
   return handleStateEvent(snapshot, true)
+}
+
+/**
+ * Failure observers run only after the event passes the operation/revision
+ * fence and is projected into the task store. Screens can therefore present
+ * one user-visible failure without accepting stale native events.
+ */
+export function subscribeToNativeTransferFailures(observer: NativeTransferFailureObserver): () => void {
+  failureObservers.add(observer)
+  return () => failureObservers.delete(observer)
 }
 
 export function replayBufferedNativeTransferEvents(): void {
@@ -378,6 +390,16 @@ function handleStateEvent(event: NativeTransferStateEvent, bufferUnknown: boolea
   return projected
 }
 
+function notifyFailureObservers(event: NativeTransferFailureEvent): void {
+  for (const observer of failureObservers) {
+    try {
+      observer(event)
+    } catch (error) {
+      console.warn('Unable to present a native transfer failure.', error)
+    }
+  }
+}
+
 function handleProgressEvent(event: NativeTransferProgressEvent, bufferUnknown: boolean): boolean {
   if (!hasTask(event.transferId)) {
     if (bufferUnknown) bufferEvent(event.transferId, {event, kind: 'progress'})
@@ -392,7 +414,10 @@ function handleFailureEvent(event: NativeTransferFailureEvent, bufferUnknown: bo
     return false
   }
   const projected = projectNativeTransferEvent(event)
-  if (projected) persistChunkDigestMismatchEvidence(event)
+  if (projected) {
+    persistChunkDigestMismatchEvidence(event)
+    notifyFailureObservers(event)
+  }
   return projected
 }
 

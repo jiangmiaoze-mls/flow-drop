@@ -23,6 +23,7 @@ import {
   ensureNativeTransferStarted,
   projectNativeTransferSnapshot,
   projectNativeTransferStartFailure,
+  subscribeToNativeTransferFailures,
   waitForNativeTransferStart
 } from '@/network/nativeTransferProjectionRuntime'
 import {
@@ -68,13 +69,16 @@ export default function Transmission() {
   const tasksById = useV3TransferProjectionStore((state) => state.tasksById)
   const beginPendingOperation = useV3TransferProjectionStore((state) => state.beginPendingOperation)
   const createTransfer = useV3TransferProjectionStore((state) => state.createTransfer)
+  const deleteTransfer = useV3TransferProjectionStore((state) => state.deleteTransfer)
   const flushPersistence = useV3TransferProjectionStore((state) => state.flushPersistence)
   const hydratePeer = useV3TransferProjectionStore((state) => state.hydratePeer)
   const rollbackPendingOperation = useV3TransferProjectionStore((state) => state.rollbackPendingOperation)
   const resolvePendingOperation = useV3TransferProjectionStore((state) => state.resolvePendingOperation)
   const isMounted = useRef(false)
   const hydratedPeers = useRef(new Set<string>())
+  const presentedFailureEvents = useRef(new Set<string>())
   const [isChoosingFiles, setIsChoosingFiles] = useState(false)
+  const [resendingTransferIds, setResendingTransferIds] = useState<Set<string>>(() => new Set())
   const [transferError, setTransferError] = useState<string | null>(null)
   const nativeControllerAvailable = isNativeTransferControllerAvailable()
   const deviceName = params.name || '未知设备'
@@ -89,8 +93,10 @@ export default function Transmission() {
   // An optimistic cancellation is not terminal until the Agent confirms it.
   // Keep it visible while native reconciliation retries after a lost network.
   const currentTransfers = outgoingTransfers.filter((task) => (
-    task.status !== 'completed' && !(task.status === 'cancelled' && !task.isOptimistic)
+    !isTerminalTransferStatus(task.status)
+      || (task.status === 'cancelled' && task.isOptimistic)
   ))
+  const failedTransfers = outgoingTransfers.filter((task) => task.status === 'failed')
   const queueCount = currentTransfers.filter((task) => !isTerminalTransferStatus(task.status)).length
 
   useEffect(() => {
@@ -164,6 +170,17 @@ export default function Transmission() {
   useEffect(() => {
     void startNextQueuedTransfer()
   }, [outgoingTransfers, startNextQueuedTransfer])
+
+  useEffect(() => subscribeToNativeTransferFailures((event) => {
+    if (!params.id || isNonActionableNativeFailure(event.errorCode)) return
+    const task = useV3TransferProjectionStore.getState().tasksById[event.transferId]
+    if (!task || task.peerDeviceId !== params.id) return
+
+    const eventKey = `${event.transferId}:${event.operationId}:${event.revision}:${event.errorCode}`
+    if (presentedFailureEvents.current.has(eventKey)) return
+    presentedFailureEvents.current.add(eventKey)
+    reportTransferError(new V3TransferUiError(event.errorCode))
+  }), [params.id, reportTransferError])
 
   useEffect(() => {
     if (!params.id || hydratedPeers.current.has(params.id)) return
@@ -332,8 +349,9 @@ export default function Transmission() {
     await startNativeTask(transferId, true)
   }, [startNativeTask])
 
-  const handleResendPartReadTransfer = useCallback(async (task: V3OutgoingTransferTask) => {
-    if (task.status !== 'failed' || task.failureCode !== 'PART_READ_ERROR') return
+  const handleResendFailedTransfer = useCallback(async (task: V3OutgoingTransferTask) => {
+    if (task.status !== 'failed' || resendingTransferIds.has(task.transferId)) return
+    setResendingTransferIds((current) => new Set(current).add(task.transferId))
     try {
       const replacement = await createTransfer({
         chunkSizeBytes: task.chunkSizeBytes,
@@ -347,8 +365,24 @@ export default function Transmission() {
       void startNativeTask(replacement.transferId, false)
     } catch (error) {
       reportTransferError(error)
+    } finally {
+      setResendingTransferIds((current) => {
+        const next = new Set(current)
+        next.delete(task.transferId)
+        return next
+      })
     }
-  }, [createTransfer, reportTransferError, startNativeTask])
+  }, [createTransfer, reportTransferError, resendingTransferIds, startNativeTask])
+
+  const handleDeleteFailedTransfer = useCallback(async (transferId: string) => {
+    const task = useV3TransferProjectionStore.getState().tasksById[transferId]
+    if (!task || task.status !== 'failed') return
+    try {
+      await deleteTransfer(transferId)
+    } catch (error) {
+      reportTransferError(error)
+    }
+  }, [deleteTransfer, reportTransferError])
 
   const chooseFile = useCallback(async () => {
     if (!nativeControllerAvailable) {
@@ -496,15 +530,13 @@ export default function Transmission() {
           <Text style={[styles.emptyTransferText, {color: theme.textSecondary}]}>尚无传输任务</Text>
         ) : currentTransfers.map((task) => {
           const detail = getTransferDetailLabel(task)
-          const canRetry = (task.status === 'waiting_for_peer' || (
-            task.status === 'failed' && task.failureCode === 'PART_READ_ERROR'
-          )) && !task.pendingOperation
+          const canRetry = task.status === 'waiting_for_peer' && !task.pendingOperation
           const canRetryCancellation = task.status === 'cancelled'
             && task.isOptimistic
             && task.pendingOperation === 'cancel'
           const canPause = isPausableTransferStatus(task.status) && !task.pendingOperation
           const canResume = task.status === 'paused' && !task.pendingOperation
-          const canCancel = !isTerminalTransferStatus(task.status) && !task.pendingOperation
+          const canCancel = task.status === 'paused' && !task.pendingOperation
           const displayedBytes = getDisplayedProgressBytes(task)
           return (
             <View key={task.transferId} style={[styles.transferCard, {backgroundColor: theme.background, borderColor: theme.backgroundElement}]}>
@@ -540,16 +572,18 @@ export default function Transmission() {
                     <Pressable
                       accessibilityLabel={canRetryCancellation
                         ? '重试取消传输'
-                        : task.failureCode === 'PART_READ_ERROR' ? '重新发送文件' : '重试传输'}
+                        : '重试传输'}
                       accessibilityRole="button"
                       onPress={() => void (
                         canRetryCancellation
                           ? handleRetryCancelledTransfer(task.transferId)
-                          : task.failureCode === 'PART_READ_ERROR'
-                          ? handleResendPartReadTransfer(task)
                           : handleRetryTransfer(task.transferId)
                       )}
-                      style={({pressed}) => [styles.transferCommandButton, {backgroundColor: theme.backgroundElement}, pressed && styles.pressed]}>
+                      style={({pressed}) => [
+                        styles.transferCommandButton,
+                        {backgroundColor: theme.backgroundElement},
+                        pressed && styles.pressed
+                      ]}>
                       <SymbolView name={{ios: 'arrow.clockwise', android: 'refresh', web: 'refresh'}} size={18} tintColor={theme.text}/>
                     </Pressable>
                   ) : canResume ? (
@@ -580,12 +614,73 @@ export default function Transmission() {
                   ) : null}
                 </View>
               </View>
-              <View style={[styles.progressTrack, {backgroundColor: theme.backgroundElement}]}>
-                <View style={[styles.progressBar, {width: `${task.totalBytes === 0 ? 0 : Math.min(100, displayedBytes / task.totalBytes * 100)}%`}]}/>
-              </View>
+              {task.status !== 'failed' ? (
+                <View style={[styles.progressTrack, {backgroundColor: theme.backgroundElement}]}>
+                  <View style={[styles.progressBar, {width: `${task.totalBytes === 0 ? 0 : Math.min(100, displayedBytes / task.totalBytes * 100)}%`}]}/>
+                </View>
+              ) : null}
             </View>
           )
         })}
+
+        {failedTransfers.length > 0 ? (
+          <>
+            <View style={styles.sectionHeader}>
+              <Text style={[styles.sectionTitle, {color: theme.text}]}>失败传输</Text>
+              <Text style={[styles.queueCount, {color: theme.textSecondary}]}>{failedTransfers.length} 项</Text>
+            </View>
+            {failedTransfers.map((task) => {
+              const isResending = resendingTransferIds.has(task.transferId)
+              return (
+                <View key={task.transferId} style={[styles.transferCard, {backgroundColor: theme.background, borderColor: theme.backgroundElement}]}>
+                  <View style={styles.transferInfoRow}>
+                    <View style={[styles.fileIcon, {backgroundColor: theme.backgroundElement}]}>
+                      <SymbolView
+                        name={{ios: 'exclamationmark.triangle.fill', android: 'error_outline', web: 'error_outline'}}
+                        size={27}
+                        tintColor="#C94C4C"
+                      />
+                    </View>
+                    <View style={styles.transferInfo}>
+                      <Text numberOfLines={1} style={[styles.transferName, {color: theme.text}]}>
+                        {task.items[0]?.name ?? '未命名传输'}
+                      </Text>
+                      <Text style={[styles.transferMeta, {color: theme.textSecondary}]}>
+                        {formatBytes(task.totalBytes)} · 失败
+                      </Text>
+                      <Text style={[styles.transferDetail, {color: theme.textSecondary}]}>
+                        {getTransferDetailLabel(task)}
+                      </Text>
+                    </View>
+                    <View style={styles.transferActions}>
+                      <Pressable
+                        accessibilityLabel="重新发送文件"
+                        accessibilityRole="button"
+                        accessibilityState={{disabled: isResending}}
+                        disabled={isResending}
+                        onPress={() => void handleResendFailedTransfer(task)}
+                        style={({pressed}) => [
+                          styles.transferCommandButton,
+                          {backgroundColor: theme.backgroundElement},
+                          isResending && styles.commandDisabled,
+                          pressed && styles.pressed
+                        ]}>
+                        <SymbolView name={{ios: 'arrow.clockwise', android: 'refresh', web: 'refresh'}} size={18} tintColor={theme.text}/>
+                      </Pressable>
+                      <Pressable
+                        accessibilityLabel="删除失败传输记录"
+                        accessibilityRole="button"
+                        onPress={() => void handleDeleteFailedTransfer(task.transferId)}
+                        style={({pressed}) => [styles.deleteButton, pressed && styles.pressed]}>
+                        <SymbolView name={{ios: 'trash', android: 'delete_outline', web: 'delete_outline'}} size={18} tintColor="#FFFFFF"/>
+                      </Pressable>
+                    </View>
+                  </View>
+                </View>
+              )
+            })}
+          </>
+        ) : null}
       </ScrollView>
 
       <BasicAlertDialog
@@ -676,15 +771,16 @@ function getTransferDetailLabel(task: V3OutgoingTransferTask) {
   if (task.status === 'cancelled' && task.isOptimistic && task.pendingOperation === 'cancel') {
     return '正在等待对端确认取消'
   }
-  if (task.failureCode === CHUNK_DIGEST_MISMATCH) {
-    const mismatch = task.chunkDigestMismatches[0]
-    return mismatch
-      ? `第 ${mismatch.index + 1} 块摘要不一致，请重新发送`
-      : '文件校验失败，请重新发送'
+  if (task.status === 'paused') return ''
+  if (task.status === 'failed') {
+    if (task.failureCode === CHUNK_DIGEST_MISMATCH) {
+      const mismatch = task.chunkDigestMismatches[0]
+      if (mismatch) return `第 ${mismatch.index + 1} 块摘要不一致，请重新发送`
+    }
+    return getTransferFailureMessage(task.failureCode)
   }
-  if (task.failureCode === 'PART_READ_ERROR') return '接收端暂存读取失败，可重新发送'
-  if (task.failureCode === 'CONTENT_ROOT_MISMATCH' || task.failureCode === 'PART_CONTENT_ROOT_MISMATCH') {
-    return '文件校验失败，请重新发送'
+  if (task.status === 'waiting_for_peer' && task.failureCode) {
+    return getTransferFailureMessage(task.failureCode)
   }
   if (task.status === 'recovering') {
     if (task.recoveryManifestTotal > 0) {
@@ -696,7 +792,7 @@ function getTransferDetailLabel(task: V3OutgoingTransferTask) {
   if (task.status === 'completing' && task.verifyingPhase !== 'idle') {
     return `正在校验本地落盘内容 · ${formatBytes(task.verifyingBytes)} / ${formatBytes(task.verifyingTotalBytes)}`
   }
-  if (task.status === 'waiting_for_peer') return '正在同步传输状态'
+  if (task.status === 'waiting_for_peer') return '正在等待对端恢复连接'
   return ''
 }
 
@@ -733,9 +829,21 @@ function getTransferErrorCode(error: unknown): string {
 }
 
 function getTransferErrorMessage(error: unknown): string {
-  switch (getTransferErrorCode(error)) {
+  return getTransferFailureMessage(getTransferErrorCode(error))
+}
+
+function getTransferFailureMessage(code: string | undefined): string {
+  switch (code) {
     case 'AUTHENTICATION_REQUIRED':
       return '此设备的配对没有传输凭据，请解除信任后重新配对。'
+    case 'AUTHENTICATION_UNAVAILABLE':
+    case 'TRANSFER_AUTHORIZATION_UNAVAILABLE':
+      return '对方暂时无法读取配对权限，请稍后重试。'
+    case 'AUTHENTICATION_BACKPRESSURE':
+      return '对方正在处理过多认证请求，请稍后重试。'
+    case 'CHUNK_HASH_MISMATCH':
+    case 'HASH_MISMATCH':
+      return '文件分块校验失败，请重新选择文件后发送。'
     case 'FILE_ACCESS_NOT_PERSISTABLE':
       return '所选文件不支持断点恢复，请换用系统文件选择器重新选择。'
     case CHUNK_DIGEST_MISMATCH:
@@ -747,10 +855,27 @@ function getTransferErrorMessage(error: unknown): string {
       return '文件在准备或传输期间发生变化，请重新选择文件。'
     case 'FILE_METADATA_UNAVAILABLE':
       return '无法读取文件大小，请重新选择文件。'
+    case 'INSUFFICIENT_STORAGE':
+      return '对方存储空间不足，无法接收文件。'
+    case 'INVALID_TRANSFER':
+    case 'INVALID_TRANSFER_REQUEST':
+      return '传输请求无效，请重新选择文件后发送。'
     case 'NATIVE_TRANSFER_UNAVAILABLE':
       return '当前应用构建未包含 Android 原生传输控制器，不能回退到旧传输协议。'
+    case 'NETWORK_TIMEOUT':
+    case 'PEER_OFFLINE':
+      return '无法连接对方设备，请确认对方在线且处于同一局域网。'
+    case 'PART_READ_ERROR':
+      return '接收端暂存文件读取失败，请重新发送文件。'
     case 'TRANSFER_RECEIVE_DISABLED':
       return '对方当前不接受来自此设备的传输。'
+    case 'PROTOCOL_VERSION_UNSUPPORTED':
+      return '对方不支持当前传输协议，请更新双方应用后重试。'
+    case 'TRANSFER_CLOSING':
+    case 'TRANSFER_COMPLETION_CONFLICT':
+      return '对方正在完成或校验传输，请等待当前状态同步。'
+    case 'TRANSFER_INCOMPLETE':
+      return '传输尚未接收完整，无法完成文件校验。'
     case 'DEVICE_NOT_PAIRED':
       return '对方未保存此设备的配对关系，请重新配对。'
     case 'V3_CAPABILITY_UNAVAILABLE':
@@ -761,9 +886,25 @@ function getTransferErrorMessage(error: unknown): string {
       return '当前传输状态不允许该操作。'
     case 'TRANSFER_ENDPOINT_UNAVAILABLE':
       return '无法连接对方设备，任务会保留等待后续重试。'
+    case 'TRANSFER_PAUSED':
+      return '传输已在对方暂停，请恢复后重试。'
+    case 'TRANSFER_PROTOCOL_ERROR':
+      return '对方返回了无效的传输协议数据，请更新双方应用后重试。'
+    case 'TRANSFER_RECOVERY_CONFIG_INVALID':
+      return '本地恢复信息无效，请重新选择文件并发送。'
+    case 'STATUS_REPAIR_RATE_LIMITED':
+      return '传输状态同步过于频繁，请稍后重试。'
+    case 'TRANSFER_FAILED':
+      return '对方已将该传输标记为失败，请重新发送文件。'
     default:
-      return '无法完成传输，请确认对方 Agent 已更新且设备处于同一局域网。'
+      return code
+        ? `传输失败（${code}），请确认双方已更新且处于同一局域网。`
+        : '传输失败，未收到具体错误原因，请检查对方 Agent 日志。'
   }
+}
+
+function isNonActionableNativeFailure(code: string): boolean {
+  return code === 'TRANSFER_CANCELLED' || code === 'TRANSFER_SUPERSEDED'
 }
 
 function isPeerUnavailableError(code: string) {
@@ -977,6 +1118,9 @@ const styles = StyleSheet.create({
     marginLeft: 8,
     width: 36
   },
+  commandDisabled: {
+    opacity: 0.48
+  },
   transferActions: {
     flexDirection: 'row',
     gap: 6,
@@ -988,6 +1132,14 @@ const styles = StyleSheet.create({
   cancelButton: {
     alignItems: 'center',
     backgroundColor: '#C94C4C',
+    borderRadius: 6,
+    height: 36,
+    justifyContent: 'center',
+    width: 36
+  },
+  deleteButton: {
+    alignItems: 'center',
+    backgroundColor: '#68707A',
     borderRadius: 6,
     height: 36,
     justifyContent: 'center',

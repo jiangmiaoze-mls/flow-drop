@@ -25,6 +25,7 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -305,7 +306,8 @@ private data class QueuedControl(
 
 private data class StoppedRun(
   val activeCalls: List<Call>,
-  val job: Job?
+  val job: Job?,
+  val repairJob: Job?
 )
 
 private data class PreparedControl(
@@ -1021,11 +1023,17 @@ class TransferController(private val context: Context) : ComponentCallbacks2, Ap
 
   private fun stopRunAndBlockLocked(record: TransferRecord): StoppedRun {
     record.requestsBlocked = true
-    return StoppedRun(record.activeCalls.toList(), stopRunLocked(record))
+    val repairJob = record.repairJob
+    record.repairJob = null
+    record.repairMode = false
+    record.repairReason = null
+    record.repairTargetRevision = record.revision
+    return StoppedRun(record.activeCalls.toList(), stopRunLocked(record), repairJob)
   }
 
   private fun cancelStoppedRun(stoppedRun: StoppedRun) {
     stoppedRun.job?.cancel()
+    stoppedRun.repairJob?.cancel()
     stoppedRun.activeCalls.forEach { call -> call.cancel() }
   }
 

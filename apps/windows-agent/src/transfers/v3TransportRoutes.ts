@@ -1,6 +1,7 @@
 import type {FastifyInstance, FastifyPluginAsync, FastifyRequest} from 'fastify'
 
 import {assertCanonicalJsonBody} from './v3CanonicalJson'
+import {V3AuthenticationError} from './v3TransferAuthenticator'
 import './v3Fastify'
 import {V3TransportError} from './v3TransportError'
 import {parseV3ChunkIndex, parseV3ContentRange} from './v3TransferService'
@@ -183,13 +184,20 @@ async function authenticateRequest(
   path: string,
   body: Buffer
 ): Promise<string> {
-  return fastify.v3TransferAuthenticator.authenticate({
-    authorization: request.headers.authorization,
-    body,
-    method,
-    path,
-    sourceDeviceId: request.headers['x-flowdrop-source-device-id']
-  })
+  try {
+    return await fastify.v3TransferAuthenticator.authenticate({
+      authorization: request.headers.authorization,
+      body,
+      method,
+      path,
+      sourceDeviceId: request.headers['x-flowdrop-source-device-id']
+    })
+  } catch (error) {
+    if (error instanceof V3AuthenticationError) {
+      fastify.log.warn({method, path, reason: error.reason}, 'V3 transport authentication rejected')
+    }
+    throw error
+  }
 }
 
 function getRequestTarget(request: FastifyRequest, allowQuery = false): string {

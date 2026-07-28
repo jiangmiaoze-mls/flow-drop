@@ -21,6 +21,20 @@ export type V3TransferAuthenticatorOptions = {
   now?: () => number
 }
 
+export type V3AuthenticationFailureReason =
+  | 'missing_or_malformed_headers'
+  | 'stale_timestamp'
+  | 'missing_transfer_credential'
+  | 'nonce_replayed'
+  | 'signature_mismatch'
+
+export class V3AuthenticationError extends V3TransportError {
+  constructor(public readonly reason: V3AuthenticationFailureReason) {
+    super('AUTHENTICATION_REQUIRED', 401)
+    this.name = 'V3AuthenticationError'
+  }
+}
+
 type NonceExpiry = {
   expiresAt: number
   key: string
@@ -51,27 +65,24 @@ export class V3TransferAuthenticator {
   }): Promise<string> {
     const sourceDeviceId = getHeader(input.sourceDeviceId)
     const authorization = parseAuthorization(input.authorization)
-    if (!sourceDeviceId || !authorization || !isFreshTimestamp(authorization.timestamp, this.now())) {
-      throw new V3TransportError('AUTHENTICATION_REQUIRED', 401)
-    }
+    if (!sourceDeviceId || !authorization) throw new V3AuthenticationError('missing_or_malformed_headers')
+    if (!isFreshTimestamp(authorization.timestamp, this.now())) throw new V3AuthenticationError('stale_timestamp')
     let access
     try {
       access = await this.trustedDeviceAccess.get(sourceDeviceId)
     } catch {
       throw new V3TransportError('AUTHENTICATION_UNAVAILABLE', 503)
     }
-    if (!isFreshTimestamp(authorization.timestamp, this.now())) {
-      throw new V3TransportError('AUTHENTICATION_REQUIRED', 401)
-    }
+    if (!isFreshTimestamp(authorization.timestamp, this.now())) throw new V3AuthenticationError('stale_timestamp')
     const secret = access?.transferSecret
-    if (!secret) throw new V3TransportError('AUTHENTICATION_REQUIRED', 401)
+    if (!secret) throw new V3AuthenticationError('missing_transfer_credential')
 
     // The credential lookup is asynchronous, but nonce inspection and marking
     // remain in one synchronous continuation to make concurrent replays lose.
     const now = this.now()
     this.removeExpiredNonces(now)
     const nonceKey = JSON.stringify([sourceDeviceId, authorization.nonce])
-    if (this.usedNonces.has(nonceKey)) throw new V3TransportError('AUTHENTICATION_REQUIRED', 401)
+    if (this.usedNonces.has(nonceKey)) throw new V3AuthenticationError('nonce_replayed')
     if (this.usedNonces.size >= this.maxTrackedNonces) {
       throw new V3TransportError('AUTHENTICATION_BACKPRESSURE', 503)
     }
@@ -84,7 +95,7 @@ export class V3TransferAuthenticator {
       timestamp: authorization.timestamp
     })
     if (!isMatchingSignature(expected, authorization.signature)) {
-      throw new V3TransportError('AUTHENTICATION_REQUIRED', 401)
+      throw new V3AuthenticationError('signature_mismatch')
     }
     const expiresAt = now + this.nonceTtlMs
     this.usedNonces.set(nonceKey, expiresAt)

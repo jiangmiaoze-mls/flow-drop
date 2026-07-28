@@ -119,6 +119,7 @@ object V3TransferProtocol {
         append(item.sizeBytes)
         append('}')
       }
+      append(']')
       append(",\"protocol\":")
       append(PROTOCOL)
       append(",\"sourceDeviceId\":")

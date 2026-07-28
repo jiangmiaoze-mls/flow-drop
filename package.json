@@ -4,12 +4,12 @@
   "description": "",
   "private": true,
   "scripts": {
-    "mobile:dev": "pnpm --filter mobile-rn dev",
-    "mobile:build:android": "pnpm --filter mobile-rn build:android",
-    "web:dev": "pnpm --filter local-web dev",
-    "agent:start": "pnpm --filter windows-agent start",
-    "agent:dev": "pnpm --filter windows-agent dev",
-    "typecheck": "pnpm exec tsx scripts/typecheck.ts"
+    "mobile:dev": "npm run dev -w mobile-rn",
+    "mobile:build:android": "npm run build:android -w mobile-rn",
+    "web:dev": "npm run dev -w local-web",
+    "agent:start": "npm run start -w windows-agent",
+    "agent:dev": "npm run dev -w windows-agent",
+    "typecheck": "npx tsx scripts/typecheck.ts"
   },
   "keywords": [],
   "author": "",
@@ -18,5 +18,6 @@
     "@types/node": "^26.1.1",
     "tsx": "^4.23.1",
     "typescript": "^7.0.2"
-  }
+  },
+  "workspaces": ["apps/*", "packages/*"]
 }
