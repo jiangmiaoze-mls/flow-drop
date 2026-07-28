@@ -3,10 +3,7 @@ import {forwardRef, ReactNode, useCallback, useImperativeHandle, useRef, useStat
 import {Pressable, StyleSheet, Text, View} from 'react-native'
 import type {TransmissionRecordDetail} from '@flowdrop/types'
 
-import {
-  TRANSMISSION_RECORD_FILE_TYPE_ICONS,
-  type TransmissionRecordFileType
-} from '@/components/TransmissionRecordFilterBottomSheet'
+import {TRANSMISSION_RECORD_FILE_TYPE_ICONS} from '@/components/TransmissionRecordFilterBottomSheet'
 import BottomSheet, {type BottomSheetRef} from '@/components/ui/BottomSheet'
 import {PAGE_HORIZONTAL_PADDING} from '@/constants/layout'
 import {useTheme} from '@/hooks/use-theme'
@@ -135,11 +132,14 @@ const TransmissionRecordDetailBottomSheet = forwardRef<
               </Text>
             </View>
           </DetailRow>
-          <DetailRow label="本机暂存" last>
-            <Text numberOfLines={2} style={[styles.locationText, {color: theme.text}]}>
-              {record.sourceUri ?? '文字传输不产生本机暂存文件'}
-            </Text>
-          </DetailRow>
+          {
+            record.sourceUri &&
+            <DetailRow label="本机暂存" last>
+              <Text numberOfLines={2} style={[styles.locationText, {color: theme.text}]}>
+                {record.sourceUri}
+              </Text>
+            </DetailRow>
+          }
         </View>
 
         {onDelete || onOpenFolder || onShare ? <View style={styles.actions}>

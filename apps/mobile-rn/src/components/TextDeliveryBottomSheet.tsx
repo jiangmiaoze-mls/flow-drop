@@ -7,11 +7,11 @@ import {
 } from '@gorhom/bottom-sheet'
 import {SymbolView} from 'expo-symbols'
 import {forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState} from 'react'
-import {BackHandler, Keyboard, Pressable, StyleSheet, Text, View} from 'react-native'
-
+import {BackHandler, Keyboard, Pressable, StyleSheet, Text} from 'react-native'
 import {PAGE_HORIZONTAL_PADDING} from '@/constants/layout'
 import {useStableBottomSheetGesture} from '@/hooks/use-stable-bottom-sheet-gesture'
 import {useTheme} from '@/hooks/use-theme'
+import {TextInput} from 'react-native-gesture-handler'
 
 
 export type TextDeliveryBottomSheetRef = {
@@ -30,13 +30,20 @@ const TextDeliveryBottomSheet = forwardRef<
 >(function TextDeliveryBottomSheet({onSubmit, targetName}, ref) {
   const theme = useTheme()
   const bottomSheetRef = useRef<BottomSheetModal>(null)
+  const inputRef = useRef<TextInput>(null)
   const isMountedRef = useRef(false)
   const [text, setText] = useState('')
   const [isPresented, setIsPresented] = useState(false)
   const canSubmit = text.trim().length > 0
-
-  // 用于追踪键盘当前的可见状态
   const isKeyboardVisibleRef = useRef(false)
+
+  const onChange = (index: number) => {
+    if (index === 0) {
+      requestAnimationFrame(() => {
+       inputRef.current?.focus()
+      })
+    }
+  }
 
   useEffect(() => {
     isMountedRef.current = true
@@ -45,7 +52,6 @@ const TextDeliveryBottomSheet = forwardRef<
     }
   }, [])
 
-  // 监听键盘弹起与收起事件
   useEffect(() => {
     const showSubscription = Keyboard.addListener('keyboardDidShow', () => {
       isKeyboardVisibleRef.current = true
@@ -108,17 +114,15 @@ const TextDeliveryBottomSheet = forwardRef<
       appearsOnIndex={0}
       disappearsOnIndex={-1}
       opacity={0.38}
-      // 禁用组件内置的无脑关闭行为
       pressBehavior="none"
     >
-      {/* 核心修复：用一个占满背景的 Pressable 自己接管点击逻辑，绕过内置组件被禁用 onPress 的 bug */}
       <Pressable
         style={StyleSheet.absoluteFill}
         onPress={() => {
           if (isKeyboardVisibleRef.current) {
-            Keyboard.dismiss() // 键盘存在时，仅收起键盘
+            Keyboard.dismiss()
           } else {
-            dismiss() // 键盘不在时，保留点击背景关闭弹窗的功能
+            dismiss()
           }
         }}
       />
@@ -127,6 +131,7 @@ const TextDeliveryBottomSheet = forwardRef<
 
   return (
     <BottomSheetModal
+      onChange={onChange}
       android_keyboardInputMode="adjustPan"
       backdropComponent={renderBackdrop}
       backgroundStyle={{backgroundColor: theme.background}}
@@ -150,6 +155,7 @@ const TextDeliveryBottomSheet = forwardRef<
           onPress={Keyboard.dismiss} // 内部：点击内容空白处仅收起键盘
           style={styles.content}>
           <BottomSheetTextInput
+            ref={inputRef}
             accessibilityLabel="投递文字内容"
             multiline
             onChangeText={setText}
@@ -166,18 +172,6 @@ const TextDeliveryBottomSheet = forwardRef<
             textAlignVertical="top"
             value={text}
           />
-
-          <View style={styles.targetRow}>
-            <View style={styles.targetIcon}>
-              <SymbolView
-                name={{ios: 'laptopcomputer', android: 'computer', web: 'computer'}}
-                size={20}
-                tintColor="#FFFFFF"
-              />
-            </View>
-            <Text style={[styles.targetLabel, {color: theme.textSecondary}]}>正在投递至</Text>
-            <Text numberOfLines={1} style={[styles.targetName, {color: theme.text}]}>{targetName}</Text>
-          </View>
 
           <Pressable
             accessibilityLabel={`立即投递文字至 ${targetName}`}
@@ -214,7 +208,8 @@ export default TextDeliveryBottomSheet
 const styles = StyleSheet.create({
   content: {
     paddingVertical: 20,
-    paddingHorizontal: PAGE_HORIZONTAL_PADDING
+    paddingHorizontal: PAGE_HORIZONTAL_PADDING,
+    gap: 20
   },
   input: {
     borderRadius: 16,
@@ -223,29 +218,6 @@ const styles = StyleSheet.create({
     lineHeight: 23,
     paddingHorizontal: 18,
     paddingVertical: 16
-  },
-  targetRow: {
-    alignItems: 'center',
-    flexDirection: 'row',
-    height: 54
-  },
-  targetIcon: {
-    alignItems: 'center',
-    backgroundColor: '#202020',
-    borderRadius: 7,
-    height: 28,
-    justifyContent: 'center',
-    width: 28
-  },
-  targetLabel: {
-    fontSize: 13,
-    marginLeft: 10
-  },
-  targetName: {
-    flex: 1,
-    fontSize: 13,
-    fontWeight: '600',
-    marginLeft: 4
   },
   submitButton: {
     alignItems: 'center',
