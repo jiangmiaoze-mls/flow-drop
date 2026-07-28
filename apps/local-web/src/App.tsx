@@ -52,6 +52,8 @@ type LocalFileDemoTransfer = {
   fileName: string
   id: string
   mimeType: string
+  outgoingTransfer?: OutgoingTransfer
+  outgoingTransferId?: string
   sha256: string
   sizeBytes: number
   status: 'received' | 'waiting_for_peer'
@@ -67,6 +69,15 @@ type PeerTransfer = {
   transferredBytes: number
   transferId: string
   updatedAt: number
+}
+
+type OutgoingTransfer = {
+  acknowledgedRanges: Record<string, Array<[number, number]>>
+  chunkSizeBytes: number
+  items: Array<{contentRoot: string; itemId: string; mimeType: string; name: string; sizeBytes: number}>
+  revision: number
+  status: 'cancelled' | 'completed' | 'failed' | 'paused' | 'preparing' | 'transferring' | 'waiting_for_peer'
+  transferId: string
 }
 
 type TextMessage = {
@@ -105,6 +116,13 @@ async function getPeerTransfers(): Promise<PeerTransfer[]> {
   return payload.transfers
 }
 
+async function getOutgoingTransfers(): Promise<OutgoingTransfer[]> {
+  const response = await fetch('/api/outgoing-transfers')
+  if (!response.ok) throw new Error('Unable to load outgoing transfers.')
+  const payload = await response.json() as {transfers: OutgoingTransfer[]}
+  return payload.transfers
+}
+
 async function getTextMessages(deviceId: string): Promise<TextMessage[]> {
   const response = await fetch(`/api/messages?deviceId=${encodeURIComponent(deviceId)}`)
   if (!response.ok) throw new Error('Unable to load text messages.')
@@ -118,6 +136,7 @@ export default function App() {
   const [error, setError] = useState<string | null>(null)
   const [fileDemoTransfers, setFileDemoTransfers] = useState<LocalFileDemoTransfer[]>([])
   const [peerTransfers, setPeerTransfers] = useState<PeerTransfer[]>([])
+  const [outgoingTransfers, setOutgoingTransfers] = useState<OutgoingTransfer[]>([])
   const [transferNotice, setTransferNotice] = useState<string | null>(null)
   const [isDecidingPairing, setIsDecidingPairing] = useState(false)
   const [isCreatingSession, setIsCreatingSession] = useState(false)
@@ -129,19 +148,22 @@ export default function App() {
   const [messageDeviceId, setMessageDeviceId] = useState('')
   const [messages, setMessages] = useState<TextMessage[]>([])
   const [sendingMessage, setSendingMessage] = useState(false)
+  const [fileRecipientDeviceId, setFileRecipientDeviceId] = useState('')
 
   const refresh = useCallback(async () => {
     try {
-      const [nextData, nextRequests, nextFileDemoTransfers, nextPeerTransfers] = await Promise.all([
+      const [nextData, nextRequests, nextFileDemoTransfers, nextPeerTransfers, nextOutgoingTransfers] = await Promise.all([
         getDevices(),
         getPairingRequests(),
         getLocalFileDemoTransfers(),
-        getPeerTransfers()
+        getPeerTransfers(),
+        getOutgoingTransfers()
       ])
       if (!isMounted.current) return
       setData(nextData)
       setFileDemoTransfers(nextFileDemoTransfers)
       setPeerTransfers(nextPeerTransfers)
+      setOutgoingTransfers(nextOutgoingTransfers)
       setPendingPairingRequests(nextRequests.requests)
       setError(null)
     } catch {
@@ -348,6 +370,19 @@ export default function App() {
         const payload = await response.json().catch(() => null) as {message?: string} | null
         throw new Error(payload?.message || 'Unable to save the local file demo item.')
       }
+      const payload = await response.json() as {transfer: LocalFileDemoTransfer}
+      if (direction === 'send') {
+        if (!fileRecipientDeviceId) throw new Error('请先选择接收手机。')
+        const queueResponse = await fetch('/api/outgoing-transfers', {
+          body: JSON.stringify({fileDemoTransferId: payload.transfer.id, recipientDeviceId: fileRecipientDeviceId}),
+          headers: {'content-type': 'application/json'},
+          method: 'POST'
+        })
+        if (!queueResponse.ok) {
+          const queuePayload = await queueResponse.json().catch(() => null) as {message?: string} | null
+          throw new Error(queuePayload?.message || 'Unable to queue outgoing transfer.')
+        }
+      }
       await refresh()
       if (isMounted.current) setError(null)
     } catch (uploadError) {
@@ -355,7 +390,7 @@ export default function App() {
     } finally {
       if (isMounted.current) setIsUploadingDirection(null)
     }
-  }, [refresh])
+  }, [fileRecipientDeviceId, refresh])
 
   const handleFileSelection = useCallback((direction: LocalFileDemoDirection, event: ChangeEvent<HTMLInputElement>) => {
     const file = event.currentTarget.files?.[0]
@@ -424,7 +459,7 @@ export default function App() {
         <div className="section-heading">
           <div>
             <h2 id="file-demo-title">本机文件演示</h2>
-            <p className="section-description">接收操作会将文件保存到本机演示目录；发送操作只创建持久化等待队列，当前移动端尚未提供接收端，因此不会显示为已发送。</p>
+            <p className="section-description">接收操作会将文件保存到本机演示目录；发送操作会为所选的已配对手机创建持久化出站传输。</p>
           </div>
         </div>
         <div className="file-demo-actions">
@@ -435,10 +470,19 @@ export default function App() {
           </label>
           <label className={`file-action file-action-secondary ${isUploadingDirection === 'send' ? 'is-busy' : ''}`}>
             <span>发送文件</span>
-            <small>创建等待对端的队列</small>
-            <input disabled={isUploadingDirection !== null} onChange={(event) => handleFileSelection('send', event)} type="file"/>
+            <small>选择文件并发送到手机</small>
+            <input disabled={isUploadingDirection !== null || !fileRecipientDeviceId} onChange={(event) => handleFileSelection('send', event)} type="file"/>
           </label>
         </div>
+        <label className="file-recipient">
+          <span>接收手机</span>
+          <select onChange={(event) => setFileRecipientDeviceId(event.target.value)} value={fileRecipientDeviceId}>
+            <option value="">请选择已配对手机</option>
+            {data.trustedDevices.filter((device) => device.deviceKind === 'mobile').map((device) => (
+              <option key={device.deviceId} value={device.deviceId}>{device.deviceName}</option>
+            ))}
+          </select>
+        </label>
         <div className="file-demo-grid">
           <FileDemoList emptyText="还没有接收的演示文件" title="已接收" transfers={receivedFiles}/>
           <FileDemoList emptyText="还没有待发送文件" title="发送队列" transfers={sendingFiles}/>
@@ -494,6 +538,17 @@ export default function App() {
         <PeerTransferList transfers={peerTransfers}/>
       </section>
 
+      <section aria-labelledby="outgoing-transfers-title">
+        <div className="section-heading">
+          <div>
+            <h2 id="outgoing-transfers-title">发送到移动端的传输</h2>
+            <p className="section-description">显示 Agent 实际的出站状态与已确认字节数。</p>
+          </div>
+          <span>{outgoingTransfers.length} 项</span>
+        </div>
+        <OutgoingTransferList transfers={outgoingTransfers}/>
+      </section>
+
       <section aria-labelledby="discovered-title">
         <div className="section-heading">
           <h2 id="discovered-title">局域网设备</h2>
@@ -545,6 +600,32 @@ function PeerTransferList({transfers}: {transfers: PeerTransfer[]}) {
   )
 }
 
+function OutgoingTransferList({transfers}: {transfers: OutgoingTransfer[]}) {
+  if (transfers.length === 0) return <p className="empty">还没有发送到移动端的传输</p>
+  return (
+    <div className="table-wrap">
+      <table>
+        <thead><tr><th>文件</th><th>进度</th><th>状态</th><th>版本</th></tr></thead>
+        <tbody>
+          {transfers.map((transfer) => {
+            const totalBytes = transfer.items.reduce((total, item) => total + item.sizeBytes, 0)
+            const confirmedBytes = transfer.items.reduce((total, item) => total + (transfer.acknowledgedRanges[item.itemId] ?? [])
+              .reduce((itemTotal, [start, end]) => itemTotal + end - start + 1, 0), 0)
+            return (
+              <tr key={transfer.transferId}>
+                <td><strong>{transfer.items.map((item) => item.name).join('、')}</strong><small>{transfer.transferId}</small></td>
+                <td>{formatBytes(confirmedBytes)} / {formatBytes(totalBytes)}</td>
+                <td><span className={`file-status ${transfer.status}`}>{getOutgoingTransferStatusLabel(transfer.status)}</span></td>
+                <td>{transfer.revision}</td>
+              </tr>
+            )
+          })}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
 function FileDemoList({emptyText, title, transfers}: {emptyText: string; title: string; transfers: LocalFileDemoTransfer[]}) {
   return (
     <section className="file-list" aria-label={title}>
@@ -557,7 +638,9 @@ function FileDemoList({emptyText, title, transfers}: {emptyText: string; title: 
                 <strong>{transfer.fileName}</strong>
                 <small>{formatBytes(transfer.sizeBytes)} · {new Date(transfer.createdAt).toLocaleString()}</small>
               </div>
-              <span className={`file-status ${transfer.status}`}>{transfer.status === 'received' ? '已接收' : '等待对端'}</span>
+              <span className={`file-status ${transfer.outgoingTransfer?.status ?? transfer.status}`}>
+                {getFileDemoStatusLabel(transfer)}
+              </span>
             </li>
           ))}
         </ul>
@@ -629,4 +712,21 @@ function getTransferStatusLabel(transfer: PeerTransfer) {
   if (transfer.status === 'verifying') return '正在校验'
   if (transfer.status === 'transferring') return '接收中'
   return '正在协商'
+}
+
+function getOutgoingTransferStatusLabel(status: OutgoingTransfer['status']) {
+  if (status === 'waiting_for_peer') return '等待移动端连接'
+  if (status === 'preparing') return '准备中'
+  if (status === 'transferring') return '传输中'
+  if (status === 'paused') return '已暂停'
+  if (status === 'completed') return '已完成'
+  if (status === 'cancelled') return '已取消'
+  return '失败'
+}
+
+function getFileDemoStatusLabel(transfer: LocalFileDemoTransfer) {
+  if (transfer.status === 'received') return '已接收'
+  if (transfer.outgoingTransfer) return getOutgoingTransferStatusLabel(transfer.outgoingTransfer.status)
+  if (transfer.outgoingTransferId) return '出站记录不可用'
+  return '历史未关联'
 }

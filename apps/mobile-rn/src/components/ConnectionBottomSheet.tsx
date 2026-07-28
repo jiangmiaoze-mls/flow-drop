@@ -60,7 +60,7 @@ const ConnectionBottomSheet = forwardRef<ConnectionBottomSheetRef, ConnectionBot
     const scanLineY = useRef(new Animated.Value(0)).current
     const hasConfirmedScan = useRef(false)
     const hasRequestedCameraForScannerEntry = useRef(false)
-    const isMounted = useRef(true)
+    const isMounted = useRef(false)
     const targetPage = useRef<PageIndex>(0)
     const pendingCameraPermissionFlow = useRef<'request' | 'settings' | null>(null)
     const shouldReopenScannerAfterSettings = useRef(false)
@@ -170,6 +170,8 @@ const ConnectionBottomSheet = forwardRef<ConnectionBottomSheetRef, ConnectionBot
 
     // 暴露 ref 方法
     const present = useCallback(() => {
+      if (!isMounted.current) return
+
       resetPager()
       setIsPresented(true)
       bottomSheetRef.current?.present()
@@ -193,6 +195,10 @@ const ConnectionBottomSheet = forwardRef<ConnectionBottomSheetRef, ConnectionBot
     }, [dismiss, isPresented])
 
     const handleDismiss = useCallback(() => {
+      // The parent can navigate away immediately after dismissing the sheet.
+      // Gorhom invokes this callback after its close animation has finished.
+      if (!isMounted.current) return
+
       setIsPresented(false)
       setIsSubmitting(false)
       resetPager()

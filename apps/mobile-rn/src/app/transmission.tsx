@@ -11,18 +11,18 @@ import {PAGE_HORIZONTAL_PADDING} from '@/constants/layout'
 import {useTheme} from '@/hooks/use-theme'
 import {getDeviceId} from '@/network/discoveryService'
 import {
-  pollV3TextMessages,
   sendV3TextMessage,
   textMessageByteLength,
   V3_TEXT_MESSAGE_MAX_BYTES
 } from '@/network/v3TextMessageClient'
 import {
   cancelNativeTransfer,
+  deleteNativeOutgoingTransferFiles,
   getNativeTransferSnapshot,
   isNativeTransferControllerAvailable,
   pauseNativeTransfer,
-  retainNativeTransferSourceUris,
   resumeNativeTransfer,
+  stageNativeTransferSources,
   NativeTransferControllerError,
   type NativeTransferSnapshot
 } from '@/network/nativeTransferController'
@@ -42,11 +42,9 @@ import {
 } from '@/storage/v3TransferProjectionRepository'
 import {useV3TransferProjectionStore} from '@/store/useV3TransferProjectionStore'
 import {
-  latestTextMessageCursor,
   markTextMessageDelivery,
   markTextMessageFailed,
   saveOutgoingTextMessage,
-  saveReceivedTextMessages,
   type LocalTextMessage
 } from '@/storage/v3TextMessageRepository'
 import * as Crypto from 'expo-crypto'
@@ -91,7 +89,6 @@ export default function Transmission() {
   const resolvePendingOperation = useV3TransferProjectionStore((state) => state.resolvePendingOperation)
   const isMounted = useRef(false)
   const hydratedPeers = useRef(new Set<string>())
-  const lastTextPollingError = useRef<string | null>(null)
   const presentedFailureEvents = useRef(new Set<string>())
   const [isChoosingFiles, setIsChoosingFiles] = useState(false)
   const [resendingTransferIds, setResendingTransferIds] = useState<Set<string>>(() => new Set())
@@ -145,45 +142,6 @@ export default function Transmission() {
     if (isMounted.current) setTransferError(getTransferErrorMessage(error))
   }, [])
 
-  const syncIncomingTextMessages = useCallback(async () => {
-    const peer = getTransferPeer()
-    if (!peer) return
-    const localDeviceId = await getDeviceId()
-    let after = await latestTextMessageCursor(peer.id, localDeviceId)
-    while (true) {
-      const page = await pollV3TextMessages(
-        {address: peer.ip, controlPort: peer.controlPort, deviceId: peer.id},
-        after
-      )
-      await saveReceivedTextMessages(peer.id, page.messages, localDeviceId)
-      if (page.messages.length === 0 || page.nextAfter === after) return
-      after = page.nextAfter
-    }
-  }, [getTransferPeer])
-
-  useEffect(() => {
-    if (!isPaired) return
-    let active = true
-    const refresh = async () => {
-      try {
-        await syncIncomingTextMessages()
-        lastTextPollingError.current = null
-      } catch (error) {
-        const message = getTextMessageErrorMessage(error)
-        if (active && lastTextPollingError.current !== message) {
-          lastTextPollingError.current = message
-          setTransferError(message)
-        }
-      }
-    }
-    void refresh()
-    const timer = setInterval(() => void refresh(), 3_000)
-    return () => {
-      active = false
-      clearInterval(timer)
-    }
-  }, [isPaired, syncIncomingTextMessages])
-
   const handleSendText = useCallback(async (content: string): Promise<boolean> => {
     const peer = getTransferPeer()
     if (!peer) {
@@ -212,14 +170,13 @@ export default function Transmission() {
         {content, messageId}
       )
       await markTextMessageDelivery(accepted, peer.id)
-      await syncIncomingTextMessages()
       return true
     } catch (error) {
       await markTextMessageFailed(messageId).catch(() => undefined)
       if (isMounted.current) setTransferError(getTextMessageErrorMessage(error))
       return false
     }
-  }, [getTransferPeer, syncIncomingTextMessages])
+  }, [getTransferPeer])
 
   const startNativeTask = useCallback(async (transferId: string, recovering: boolean): Promise<boolean> => {
     if (!nativeControllerAvailable) {
@@ -471,6 +428,7 @@ export default function Transmission() {
     const task = useV3TransferProjectionStore.getState().tasksById[transferId]
     if (!task || task.status !== 'failed') return
     try {
+      await deleteNativeOutgoingTransferFiles(transferId)
       await deleteTransfer(transferId)
     } catch (error) {
       reportTransferError(error)
@@ -492,17 +450,24 @@ export default function Transmission() {
     setIsChoosingFiles(true)
     try {
       const result = await DocumentPicker.getDocumentAsync({
-        // Expo otherwise copies the whole selection before this promise
-        // resolves. Native V3 staging owns that I/O after the task is visible.
+        // The native stage operation consumes this external handle immediately.
+        // SQLite receives only the resulting private file:// URI.
         copyToCacheDirectory: false,
         multiple: true
       })
       if (result.canceled) return
 
-      await retainNativeTransferSourceUris(result.assets.map((asset) => asset.uri))
       const sourceDeviceId = await getDeviceId()
       for (const asset of result.assets) {
-        const item = prepareFileItem(asset, Crypto.randomUUID())
+        const itemId = Crypto.randomUUID()
+        const transferId = Crypto.randomUUID()
+        const stagedSources = await stageNativeTransferSources({
+          items: [{itemId, name: asset.name || 'unnamed', sizeBytes: requiredAssetSize(asset), sourceUri: asset.uri}],
+          transferId
+        })
+        const sourceUri = stagedSources[itemId]
+        if (!sourceUri?.startsWith('file://')) throw new V3TransferUiError('FILE_STAGE_FAILED')
+        const item = prepareFileItem(asset, itemId, sourceUri)
         const task = await createTransfer({
           chunkSizeBytes: DEFAULT_CHUNK_SIZE_BYTES,
           items: [item],
@@ -510,7 +475,7 @@ export default function Transmission() {
           peerControlPort: peer.controlPort,
           peerDeviceId: peer.id,
           sourceDeviceId,
-          transferId: Crypto.randomUUID()
+          transferId
         })
         void startNativeTask(task.transferId, false)
       }
@@ -827,20 +792,26 @@ async function retryNativeControl<T>(operation: () => Promise<T>): Promise<T> {
 
 function prepareFileItem(
   asset: {mimeType?: string | null; name: string; size?: number; uri: string},
-  itemId: string
+  itemId: string,
+  sourceUri: string
 ) {
-  const sizeBytes = asset.size
-  if (typeof sizeBytes !== 'number' || !Number.isSafeInteger(sizeBytes) || sizeBytes < 0) {
-    throw new V3TransferUiError('FILE_METADATA_UNAVAILABLE')
-  }
+  const sizeBytes = requiredAssetSize(asset)
 
   return {
     itemId,
     mimeType: asset.mimeType || 'application/octet-stream',
     name: asset.name || 'unnamed',
     sizeBytes,
-    sourceUri: asset.uri
+    sourceUri
   }
+}
+
+function requiredAssetSize(asset: {size?: number}): number {
+  const sizeBytes = asset.size
+  if (typeof sizeBytes !== 'number' || !Number.isSafeInteger(sizeBytes) || sizeBytes < 0) {
+    throw new V3TransferUiError('FILE_METADATA_UNAVAILABLE')
+  }
+  return sizeBytes
 }
 
 function shouldRecoverNativeTask(task: V3OutgoingTransferTask) {

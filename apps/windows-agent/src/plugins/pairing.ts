@@ -3,6 +3,7 @@ import fp from 'fastify-plugin'
 import {PairingService} from '../pairing/pairingService'
 import {PeerConnectionManager} from '../realtime/peerConnectionManager'
 import {TrustedDeviceStore} from '../storage/trustedDeviceStore'
+import {V3TrustedDeviceAccessClient} from '../transfers/v3TrustedDeviceAccess'
 
 
 declare module 'fastify' {
@@ -16,7 +17,8 @@ declare module 'fastify' {
 export const pairingPlugin = fp(async (fastify) => {
   const trustedDeviceStore = new TrustedDeviceStore()
   const pairingService = new PairingService(trustedDeviceStore)
-  const peerConnectionManager = new PeerConnectionManager(fastify.agentEventBus, pairingService)
+  const trustedDeviceAccess = new V3TrustedDeviceAccessClient(trustedDeviceStore.databasePath)
+  const peerConnectionManager = new PeerConnectionManager(fastify.agentEventBus, pairingService, trustedDeviceAccess)
 
   fastify.decorate('pairingService', pairingService)
   fastify.decorate('peerConnectionManager', peerConnectionManager)
@@ -29,6 +31,7 @@ export const pairingPlugin = fp(async (fastify) => {
     unsubscribeFromResolutions()
     peerConnectionManager.closeAll()
     pairingService.close()
+    await trustedDeviceAccess.close()
     trustedDeviceStore.close()
   })
 }, {name: 'flowdrop-pairing'})

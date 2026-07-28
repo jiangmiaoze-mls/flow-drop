@@ -3,6 +3,10 @@ import * as SQLite from 'expo-sqlite'
 import type {TransferFailureCode} from '@flowdrop/types'
 
 import {applyV3TransferProjectionMigration} from './v3TransferProjectionMigration'
+import {
+  applyV3IncomingTransferProjectionMigration,
+  applyV3FileUriArchitectureReset
+} from './v3IncomingTransferProjectionMigration'
 import {applyV3TextMessageMigration} from './v3TextMessageMigration'
 
 
@@ -206,6 +210,7 @@ type MismatchRow = {
 }
 
 let databasePromise: Promise<SQLite.SQLiteDatabase> | null = null
+let didResetFileUriArchitecture = false
 let writeTail: Promise<void> = Promise.resolve()
 let projectionFlushTimer: ReturnType<typeof setTimeout> | null = null
 let pendingProjectionUpdates = new Map<string, V3TransferProjectionUpdate>()
@@ -723,9 +728,29 @@ export async function getV3TransferProjectionDatabase(): Promise<SQLite.SQLiteDa
   return getDatabase()
 }
 
+/** Returns whether this process discarded pre-file:// V3 transfer data. */
+export function consumeV3FileUriArchitectureReset(): boolean {
+  const didReset = didResetFileUriArchitecture
+  didResetFileUriArchitecture = false
+  return didReset
+}
+
+/**
+ * All V3 metadata repositories share this queue. Expo SQLite's Android
+ * bridge releases an exclusive transaction's native statement after its
+ * callback, so a second repository must not prepare statements concurrently.
+ */
+export function withV3TransferProjectionDatabaseAccess<T>(
+  operation: (database: SQLite.SQLiteDatabase) => Promise<T>
+): Promise<T> {
+  return enqueueWrite(async () => operation(await getDatabase()))
+}
+
 async function openMigratedDatabase(): Promise<SQLite.SQLiteDatabase> {
   const database = await SQLite.openDatabaseAsync(DATABASE_NAME)
   await applyV3TransferProjectionMigration(database)
+  await applyV3IncomingTransferProjectionMigration(database)
+  didResetFileUriArchitecture = await applyV3FileUriArchitectureReset(database)
   await applyV3TextMessageMigration(database)
   return database
 }

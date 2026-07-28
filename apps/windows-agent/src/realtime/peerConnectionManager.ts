@@ -9,6 +9,10 @@ import type {
 } from '@flowdrop/types'
 
 import type {PairingApprovalResolution, PairingService} from '../pairing/pairingService'
+import {V3TransferAuthenticator} from '../transfers/v3TransferAuthenticator'
+import type {V3TrustedDeviceAccess} from '../transfers/v3TrustedDeviceAccess'
+import type {V3TextMessage} from '../transfers/v3TextMessageTypes'
+import type {V3OutgoingTransferService} from '../transfers/v3OutgoingTransferService'
 import {AgentEventBus} from './agentEventBus'
 
 
@@ -18,8 +22,10 @@ export type PeerSocket = {
 }
 
 type PeerConnection = {
+  authenticated: boolean
   device?: PeerHelloPayload
   id: string
+  liveEventsReady: boolean
   remoteAddress: string
   socket: PeerSocket
 }
@@ -30,23 +36,52 @@ export class PeerConnectionManager {
 
   constructor(
     private readonly agentEventBus: AgentEventBus,
-    private readonly pairingService: PairingService
-  ) {}
+    private readonly pairingService: PairingService,
+    trustedDeviceAccess: V3TrustedDeviceAccess
+  ) {
+    this.authenticator = new V3TransferAuthenticator(trustedDeviceAccess)
+    this.unsubscribeAgentEvents = agentEventBus.subscribe((event) => {
+      if (event.type !== 'message.changed' || !isTextMessage(event.payload)) return
+      this.sendToAuthenticatedDevice(event.payload.recipientDeviceId, 'message.changed', event.payload)
+    })
+  }
+
+  private readonly authenticator: V3TransferAuthenticator
+  private readonly unsubscribeAgentEvents: () => void
 
   closeAll() {
+    this.unsubscribeAgentEvents()
     this.connections.clear()
     this.deviceConnections.clear()
   }
 
+  setOutgoingTransferService(service: V3OutgoingTransferService) {
+    this.outgoingTransferService = service
+  }
+
+  async sendOutgoingOffer(recipientDeviceId: string, transferId: string) {
+    const service = this.outgoingTransferService
+    if (!service) return
+    const connectionIds = this.deviceConnections.get(recipientDeviceId) ?? new Set<string>()
+    if (![...connectionIds].some((connectionId) => {
+      const connection = this.connections.get(connectionId)
+      return connection?.authenticated && connection.liveEventsReady
+    })) return
+    const offer = await service.markOfferDelivered(transferId, recipientDeviceId)
+    this.sendToAuthenticatedDevice(recipientDeviceId, 'file.offer', offer)
+  }
+
   register(socket: PeerSocket, remoteAddress: string): string {
     const connection: PeerConnection = {
+      authenticated: false,
       id: randomUUID(),
+      liveEventsReady: false,
       remoteAddress,
       socket
     }
     this.connections.set(connection.id, connection)
 
-    socket.on('message', (message) => this.handleMessage(connection, message))
+    socket.on('message', (message) => void this.handleMessage(connection, message))
     socket.on('close', () => this.remove(connection.id))
     socket.on('error', () => this.remove(connection.id))
     return connection.id
@@ -74,7 +109,7 @@ export class PeerConnectionManager {
     }
   }
 
-  private handleMessage(connection: PeerConnection, rawMessage: unknown) {
+  private async handleMessage(connection: PeerConnection, rawMessage: unknown) {
     const message = parsePeerMessage(rawMessage)
     if (!message) {
       this.sendError(connection.id, undefined, 'INVALID_MESSAGE')
@@ -93,6 +128,28 @@ export class PeerConnectionManager {
 
     if (!connection.device) {
       this.sendError(connection.id, message.id, 'HELLO_REQUIRED')
+      return
+    }
+
+    if (message.type === 'peer.authenticate') {
+      const authorization = (message.payload as {authorization?: unknown})?.authorization
+      try {
+        await this.authenticator.authenticate({
+          authorization,
+          body: canonicalPeerHelloBody(connection.device),
+          method: 'WS',
+          path: '/v1/peer',
+          sourceDeviceId: connection.device.deviceId
+        })
+        connection.authenticated = true
+        this.send(connection.id, 'peer.authenticated', {deviceId: connection.device.deviceId}, message.id)
+        await this.sendOutstandingOffers(connection)
+        if (this.connections.get(connection.id) === connection && connection.authenticated) {
+          connection.liveEventsReady = true
+        }
+      } catch {
+        this.sendError(connection.id, message.id, 'AUTHENTICATION_REQUIRED')
+      }
       return
     }
 
@@ -148,6 +205,8 @@ export class PeerConnectionManager {
     if (connection.device?.deviceId === device.deviceId) return
     this.removeFromDeviceIndex(connection)
     connection.device = device
+    connection.authenticated = false
+    connection.liveEventsReady = false
     const connectionIds = this.deviceConnections.get(device.deviceId) ?? new Set<string>()
     connectionIds.add(connection.id)
     this.deviceConnections.set(device.deviceId, connectionIds)
@@ -183,9 +242,51 @@ export class PeerConnectionManager {
     }
   }
 
+  private sendToAuthenticatedDevice(deviceId: string, type: string, payload: unknown) {
+    const connectionIds = this.deviceConnections.get(deviceId) ?? new Set<string>()
+    for (const connectionId of connectionIds) {
+      const connection = this.connections.get(connectionId)
+      if (connection?.authenticated && connection.liveEventsReady) this.send(connectionId, type, payload)
+    }
+  }
+
+  private async sendOutstandingOffers(connection: PeerConnection) {
+    const service = this.outgoingTransferService
+    const deviceId = connection.device?.deviceId
+    if (!service || !deviceId || !connection.authenticated) return
+    const offers = await service.getOffers(deviceId)
+    for (const offer of offers) {
+      if (!connection.authenticated || this.connections.get(connection.id) !== connection) return
+      const delivered = await service.markOfferDelivered(offer.transferId, deviceId)
+      this.send(connection.id, 'file.offer', delivered)
+    }
+  }
+
   private sendError(connectionId: string, replyTo: string | undefined, code: string) {
     this.send(connectionId, 'peer.error', {code}, replyTo)
   }
+
+  private outgoingTransferService: V3OutgoingTransferService | null = null
+}
+
+function canonicalPeerHelloBody(value: PeerHelloPayload): Buffer {
+  return Buffer.from(JSON.stringify({
+    deviceId: value.deviceId,
+    deviceKind: value.deviceKind,
+    deviceName: value.deviceName
+  }), 'utf8')
+}
+
+function isTextMessage(value: unknown): value is V3TextMessage {
+  if (!value || typeof value !== 'object') return false
+  const message = value as Record<string, unknown>
+  return typeof message.content === 'string'
+    && typeof message.contentBytes === 'number'
+    && typeof message.createdAt === 'number'
+    && typeof message.messageId === 'string'
+    && typeof message.recipientDeviceId === 'string'
+    && typeof message.senderDeviceId === 'string'
+    && typeof message.sequence === 'number'
 }
 
 function parsePeerMessage(rawMessage: unknown): PeerMessage | null {

@@ -1,6 +1,9 @@
 import {
   addNativeTransferChunkDigestListener,
   addNativeTransferFailureListener,
+  addNativeIncomingTransferFailureListener,
+  addNativeIncomingTransferStateListener,
+  getNativeIncomingTransferSnapshots,
   addNativeTransferProgressListener,
   addNativeTransferStateListener,
   getNativeTransferSnapshot,
@@ -8,6 +11,7 @@ import {
   NativeTransferControllerError,
   reconcileNativeCancelledTransfer,
   restartNativeTransferForRecovery,
+  startNativeIncomingTransfer,
   startNativeTransfer,
   type NativeTransferChunkDigestEvent,
   type NativeTransferFailureEvent,
@@ -15,6 +19,11 @@ import {
   type NativeTransferSnapshot,
   type NativeTransferStateEvent
 } from './nativeTransferController'
+import {
+  applyV3IncomingTransferEvent,
+  listV3IncomingTransfers
+} from '@/storage/v3IncomingTransferProjectionRepository'
+import {getDeviceId} from '@/network/discoveryService'
 import {getTransferSecret} from '@/storage/transferCredentialRepository'
 import {
   CHUNK_DIGEST_MISMATCH,
@@ -56,6 +65,15 @@ export function startNativeTransferProjectionRuntime(): void {
   addNativeTransferProgressListener((event) => handleProgressEvent(event, true))
   addNativeTransferFailureListener((event) => handleFailureEvent(event, true))
   addNativeTransferChunkDigestListener((event) => handleDigestEvent(event, true))
+  addNativeIncomingTransferStateListener((event) => {
+    void applyV3IncomingTransferEvent(event).catch((error) => console.warn('Unable to persist incoming transfer event.', error))
+  })
+  addNativeIncomingTransferFailureListener((event) => {
+    void applyV3IncomingTransferEvent(event).catch((error) => console.warn('Unable to persist incoming transfer failure.', error))
+  })
+  void getNativeIncomingTransferSnapshots()
+    .then((events) => Promise.all(events.map((event) => applyV3IncomingTransferEvent(event))))
+    .catch((error) => console.warn('Unable to synchronize incoming transfer snapshots.', error))
 }
 
 function beginNativeTransferRestart(transferId: string): void {
@@ -133,6 +151,7 @@ export async function recoverPersistedNativeTransfers(): Promise<void> {
         console.warn('Unable to recover V3 native transfer.', transferId, error)
       }
     })
+    await recoverPersistedNativeIncomingTransfers()
   })()
   recoveryPromise = recovery
   try {
@@ -140,6 +159,41 @@ export async function recoverPersistedNativeTransfers(): Promise<void> {
   } finally {
     if (recoveryPromise === recovery) recoveryPromise = null
   }
+}
+
+async function recoverPersistedNativeIncomingTransfers(): Promise<void> {
+  const tasks = (await listV3IncomingTransfers()).filter((task) => task.status === 'transferring')
+  if (tasks.length === 0) return
+  const recipientDeviceId = await getDeviceId()
+  await runWithConcurrency(tasks.map((task) => task.transferId), 2, async (transferId) => {
+    const task = tasks.find((candidate) => candidate.transferId === transferId)
+    if (!task) return
+    const transferSecretHex = await getTransferSecret(task.peerDeviceId)
+    if (!transferSecretHex) {
+      console.warn('Unable to recover incoming V3 transfer without credentials.', transferId)
+      return
+    }
+    try {
+      await startNativeIncomingTransfer({
+        chunkSizeBytes: task.chunkSizeBytes,
+        items: task.items.map((item) => ({
+          contentRoot: item.contentRoot,
+          itemId: item.itemId,
+          mimeType: item.mimeType,
+          name: item.name,
+          sizeBytes: item.sizeBytes
+        })),
+        peerAddress: task.peerAddress,
+        peerControlPort: task.peerControlPort,
+        recipientDeviceId,
+        revision: task.revision,
+        transferId: task.transferId,
+        transferSecretHex
+      })
+    } catch (error) {
+      console.warn('Unable to recover incoming V3 transfer.', transferId, error)
+    }
+  })
 }
 
 /**

@@ -10,13 +10,18 @@ import {AppState, Modal, Platform, Pressable, StyleSheet, Text, View} from 'reac
 
 import {useTheme} from '@/hooks/use-theme'
 import {mobilePairingService, type MobilePairingRequest} from '@/network/mobilePairingService'
+import {cleanupLegacyNativeTransferFiles} from '@/network/nativeTransferController'
 import {
   recoverPersistedNativeTransfers,
   replayBufferedNativeTransferEvents,
   startNativeTransferProjectionRuntime
 } from '@/network/nativeTransferProjectionRuntime'
+import {startV3PeerRealtimeRuntime} from '@/network/v3PeerRealtimeRuntime'
 import {setTransferSecret} from '@/storage/transferCredentialRepository'
 import {useTrustedDevicesStore} from '@/store/useTrustedDevicesStore'
+import {
+  consumeV3FileUriArchitectureReset
+} from '@/storage/v3TransferProjectionRepository'
 import {useV3TransferProjectionStore} from '@/store/useV3TransferProjectionStore'
 
 
@@ -71,10 +76,24 @@ export default function RootLayout() {
     startNativeTransferProjectionRuntime()
     void useV3TransferProjectionStore.getState().hydrateAll()
       .then(() => {
+        // New V3 records use flowdrop-managed-files. Old task data and the
+        // dedicated public Downloads folder are discarded exactly once.
+        return consumeV3FileUriArchitectureReset()
+          ? cleanupLegacyNativeTransferFiles()
+          : undefined
+      })
+      .then(() => {
         replayBufferedNativeTransferEvents()
         return recoverPersistedNativeTransfers()
       })
       .catch((error) => console.warn('Unable to hydrate V3 transfer projections.', error))
+  }, [])
+
+  useEffect(() => {
+    useTrustedDevicesStore.getState().load()
+    return startV3PeerRealtimeRuntime({
+      onError: (error) => console.warn('Unable to process a realtime peer event.', error)
+    })
   }, [])
 
   useEffect(() => {

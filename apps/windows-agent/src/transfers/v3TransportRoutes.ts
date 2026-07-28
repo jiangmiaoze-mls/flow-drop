@@ -189,6 +189,96 @@ export const v3TransportRoutes: FastifyPluginAsync = async (fastify) => {
       return sendV3Error(reply, error)
     }
   })
+
+  fastify.get('/v3/outgoing-transfers/:transferId/status', async (request, reply) => {
+    try {
+      const {transferId} = request.params as {transferId: string}
+      const requestPath = getRequestTarget(request)
+      if (!isRouteIdentifier(transferId) || requestPath !== `/v3/outgoing-transfers/${transferId}/status`) {
+        throw new V3TransportError('INVALID_TRANSPORT_REQUEST', 400)
+      }
+      const recipientDeviceId = await authenticateRequest(fastify, request, 'GET', requestPath, Buffer.alloc(0))
+      return reply.send(await fastify.v3OutgoingTransferService.getStatus(transferId, recipientDeviceId))
+    } catch (error) {
+      return sendV3Error(reply, error)
+    }
+  })
+
+  fastify.get('/v3/outgoing-transfers/:transferId/items/:itemId/chunks/:chunkIndex', async (request, reply) => {
+    try {
+      const {chunkIndex: rawChunkIndex, itemId, transferId} = request.params as {chunkIndex: string; itemId: string; transferId: string}
+      const chunkIndex = parseV3ChunkIndex(rawChunkIndex)
+      const requestPath = getRequestTarget(request)
+      if (
+        !isRouteIdentifier(transferId)
+        || !isRouteIdentifier(itemId)
+        || chunkIndex === null
+        || requestPath !== `/v3/outgoing-transfers/${transferId}/items/${itemId}/chunks/${chunkIndex}`
+      ) throw new V3TransportError('INVALID_CHUNK', 400)
+      const recipientDeviceId = await authenticateRequest(fastify, request, 'GET', requestPath, Buffer.alloc(0))
+      const chunk = await fastify.v3OutgoingTransferService.readChunk(transferId, itemId, chunkIndex, recipientDeviceId)
+      reply.header('content-range', `bytes ${chunk.start}-${chunk.end}/${chunk.total}`)
+      reply.header('x-flowdrop-chunk-sha256', chunk.sha256)
+      reply.type('application/octet-stream')
+      return reply.send(chunk.data)
+    } catch (error) {
+      return sendV3Error(reply, error)
+    }
+  })
+
+  fastify.post('/v3/outgoing-transfers/:transferId/items/:itemId/chunks/:chunkIndex/ack', async (request, reply) => {
+    try {
+      const {chunkIndex: rawChunkIndex, itemId, transferId} = request.params as {chunkIndex: string; itemId: string; transferId: string}
+      const chunkIndex = parseV3ChunkIndex(rawChunkIndex)
+      const requestPath = getRequestTarget(request)
+      if (
+        !isRouteIdentifier(transferId)
+        || !isRouteIdentifier(itemId)
+        || chunkIndex === null
+        || requestPath !== `/v3/outgoing-transfers/${transferId}/items/${itemId}/chunks/${chunkIndex}/ack`
+      ) throw new V3TransportError('INVALID_CHUNK_ACK', 400)
+      const rawBody = requireRawBody(rawBodies, request)
+      const recipientDeviceId = await authenticateRequest(fastify, request, 'POST', requestPath, rawBody)
+      assertCanonicalJsonBody(rawBody, request.body)
+      const acknowledgement = parseOutgoingChunkAcknowledgement(request.body)
+      const status = await fastify.v3OutgoingTransferService.acknowledgeChunk(
+        transferId,
+        itemId,
+        chunkIndex,
+        recipientDeviceId,
+        acknowledgement.sha256,
+        acknowledgement.sizeBytes
+      )
+      publishOutgoingTransferChange(fastify, status)
+      return reply.send(status)
+    } catch (error) {
+      return sendV3Error(reply, error)
+    }
+  })
+
+  for (const operation of ['pause', 'resume', 'cancel'] as const) {
+    fastify.post(`/v3/outgoing-transfers/:transferId/${operation}`, async (request, reply) => {
+      try {
+        const {transferId} = request.params as {transferId: string}
+        const requestPath = getRequestTarget(request)
+        if (!isRouteIdentifier(transferId) || requestPath !== `/v3/outgoing-transfers/${transferId}/${operation}`) {
+          throw new V3TransportError('INVALID_TRANSPORT_REQUEST', 400)
+        }
+        const rawBody = getControlRawBody(rawBodies, request)
+        const recipientDeviceId = await authenticateRequest(fastify, request, 'POST', requestPath, rawBody)
+        assertEmptyControlBody(rawBody, request.body)
+        const status = operation === 'pause'
+          ? await fastify.v3OutgoingTransferService.pause(transferId, recipientDeviceId)
+          : operation === 'resume'
+            ? await fastify.v3OutgoingTransferService.resume(transferId, recipientDeviceId)
+            : await fastify.v3OutgoingTransferService.cancel(transferId, recipientDeviceId)
+        publishOutgoingTransferChange(fastify, status)
+        return reply.send(status)
+      } catch (error) {
+        return sendV3Error(reply, error)
+      }
+    })
+  }
 }
 
 export function registerLegacyTransferGoneRoutes(fastify: FastifyInstance) {
@@ -265,11 +355,31 @@ function isEmptyObject(value: unknown): value is Record<string, never> {
   return value !== null && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length === 0
 }
 
+function parseOutgoingChunkAcknowledgement(value: unknown): {sha256: string; sizeBytes: number} {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new V3TransportError('INVALID_CHUNK_ACK', 400)
+  const body = value as Record<string, unknown>
+  if (Object.keys(body).length !== 2 || typeof body.sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(body.sha256) || typeof body.sizeBytes !== 'number' || !Number.isSafeInteger(body.sizeBytes) || body.sizeBytes < 0) {
+    throw new V3TransportError('INVALID_CHUNK_ACK', 400)
+  }
+  return {sha256: body.sha256, sizeBytes: body.sizeBytes}
+}
+
 function sendV3Error(reply: {code: (statusCode: number) => {send: (payload: unknown) => unknown}}, error: unknown) {
   if (error instanceof V3TransportError) {
     return reply.code(error.statusCode).send({code: error.code})
   }
   return reply.code(500).send({code: 'TRANSFER_INTERNAL_ERROR'})
+}
+
+function publishOutgoingTransferChange(
+  fastify: FastifyInstance,
+  status: {revision: number; status: string; transferId: string}
+) {
+  if (!fastify.hasDecorator('agentEventBus')) return
+  fastify.agentEventBus.publish({
+    payload: {direction: 'outgoing', revision: status.revision, status: status.status, transferId: status.transferId},
+    type: 'transfer.changed'
+  })
 }
 
 function parseChunkDigestPage(

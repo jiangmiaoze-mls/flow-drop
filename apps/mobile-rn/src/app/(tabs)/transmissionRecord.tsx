@@ -1,7 +1,11 @@
 import {SymbolView, type SymbolViewProps} from 'expo-symbols'
-import {useCallback, useMemo, useRef, useState} from 'react'
+import * as Clipboard from 'expo-clipboard'
+import {File} from 'expo-file-system'
+import * as Sharing from 'expo-sharing'
+import {useCallback, useEffect, useMemo, useRef, useState} from 'react'
 import {useFocusEffect} from 'expo-router'
 import {
+  Alert,
   Animated,
   type NativeScrollEvent,
   type NativeSyntheticEvent,
@@ -12,7 +16,8 @@ import {
   SectionList,
   StyleSheet,
   Text,
-  TextInput, TouchableOpacity,
+  TextInput,
+  TouchableOpacity,
   useWindowDimensions,
   View
 } from 'react-native'
@@ -27,16 +32,39 @@ import TransmissionRecordFilterBottomSheet, {
 } from '@/components/TransmissionRecordFilterBottomSheet'
 import {PAGE_HORIZONTAL_PADDING} from '@/constants/layout'
 import {useTheme} from '@/hooks/use-theme'
+import {
+  cancelNativeIncomingTransfer,
+  deleteNativeIncomingTransferFiles,
+  deleteNativeOutgoingTransferFiles,
+  openNativeManagedFile,
+  pauseNativeIncomingTransfer,
+  resumeNativeIncomingTransfer
+} from '@/network/nativeTransferController'
 import {listTrustedDevices} from '@/storage/trustedDeviceRepository'
-import {listAllLocalTextMessages, type LocalTextMessage} from '@/storage/v3TextMessageRepository'
-import {listV3OutgoingTransfers, type V3OutgoingTransferTask} from '@/storage/v3TransferProjectionRepository'
+import {
+  deleteLocalTextMessage,
+  listAllLocalTextMessages,
+  type LocalTextMessage,
+  subscribeToLocalTextMessageChanges
+} from '@/storage/v3TextMessageRepository'
+import {
+  deleteV3IncomingTransfer,
+  listV3IncomingTransfers,
+  subscribeToV3IncomingTransferChanges,
+  type V3IncomingTransferTask
+} from '@/storage/v3IncomingTransferProjectionRepository'
+import {
+  deleteV3OutgoingTransfer,
+  listV3OutgoingTransfers,
+  type V3OutgoingTransferTask
+} from '@/storage/v3TransferProjectionRepository'
 import type {
   TransferDirection,
   TransferRecord,
   TransmissionRecordDetail,
   TransmissionRecordFileType,
   TransmissionRecordFilter,
-  TransmissionRecordStatus,
+  TransmissionRecordStatus
 } from '@flowdrop/types'
 
 
@@ -191,10 +219,15 @@ function getTransferDirection(record: TransferRecord): TransferDirection {
 
 async function listTransferRecords(): Promise<TransferRecord[]> {
   const deviceNames = new Map(listTrustedDevices().map((device) => [device.deviceId, device.deviceName]))
-  const [v3Tasks, textMessages] = await Promise.all([listV3OutgoingTransfers(), listAllLocalTextMessages()])
+  const [v3Tasks, incomingTasks, textMessages] = await Promise.all([
+    listV3OutgoingTransfers(),
+    listV3IncomingTransfers(),
+    listAllLocalTextMessages()
+  ])
   const v3Records = v3Tasks.flatMap((task) => toV3TransferRecords(task, deviceNames))
+  const incomingRecords = incomingTasks.flatMap((task) => toV3IncomingTransferRecords(task, deviceNames))
   const textRecords = textMessages.map((message) => toTextMessageRecord(message, deviceNames))
-  return [...v3Records, ...textRecords].sort((left, right) => (right.timestamp ?? 0) - (left.timestamp ?? 0))
+  return [...v3Records, ...incomingRecords, ...textRecords].sort((left, right) => (right.timestamp ?? 0) - (left.timestamp ?? 0))
 }
 
 function toV3TransferRecords(
@@ -210,6 +243,24 @@ function toV3TransferRecords(
     peerDeviceName: deviceNames.get(task.peerDeviceId) ?? task.peerDeviceId,
     sourceUri: item.sourceUri,
     status: task.status === 'recovering' ? 'transferring' : task.status,
+    time: formatTime(task.updatedAt),
+    timestamp: task.updatedAt
+  }))
+}
+
+function toV3IncomingTransferRecords(
+  task: V3IncomingTransferTask,
+  deviceNames: Map<string, string>
+): TransferRecord[] {
+  return task.items.map((item) => ({
+    detail: formatBytes(item.sizeBytes),
+    direction: 'receive' as const,
+    fileType: getV3ItemFileType(item.mimeType, item.name),
+    id: `incoming:${task.transferId}:${item.itemId}`,
+    name: item.name,
+    peerDeviceName: deviceNames.get(task.peerDeviceId) ?? task.peerDeviceId,
+    sourceUri: item.localUri,
+    status: task.status,
     time: formatTime(task.updatedAt),
     timestamp: task.updatedAt
   }))
@@ -415,7 +466,10 @@ function FilteredRecordList({
       contentContainerStyle={styles.pageContent}
       keyExtractor={(item) => item.id}
       ListEmptyComponent={EmptyState}
-      refreshControl={<RefreshControl colors={[theme.text]} onRefresh={onRefresh} refreshing={refreshing} tintColor={theme.text}/>}
+      refreshControl={<RefreshControl colors={[theme.text]}
+                                      onRefresh={onRefresh}
+                                      refreshing={refreshing}
+                                      tintColor={theme.text}/>}
       renderItem={({item, index, section}) => (
         <RecordRow
           dateLabel={section.title}
@@ -471,6 +525,24 @@ export default function TransmissionRecord() {
     void refreshRecords()
   }, [refreshRecords]))
 
+  useEffect(() => {
+    const unsubscribe = subscribeToLocalTextMessageChanges(() => {
+      void refreshRecords()
+    })
+    return () => {
+      unsubscribe()
+    }
+  }, [refreshRecords])
+
+  useEffect(() => {
+    const unsubscribe = subscribeToV3IncomingTransferChanges(() => {
+      void refreshRecords()
+    })
+    return () => {
+      unsubscribe()
+    }
+  }, [refreshRecords])
+
   const allRecordSections = useMemo(() => buildDateSections(records), [records])
 
   const deviceSections: RecordSection[] = useMemo(
@@ -512,6 +584,98 @@ export default function TransmissionRecord() {
     }
     detailSheetRef.current?.present(detail)
   }, [])
+
+  const handleIncomingControl = useCallback(async (
+    record: TransmissionRecordDetail,
+    operation: 'cancel' | 'pause' | 'resume'
+  ) => {
+    const transferId = /^incoming:([^:]+):/.exec(record.id)?.[1]
+    if (!transferId) return
+    switch (operation) {
+      case 'pause':
+        await pauseNativeIncomingTransfer(transferId)
+        break
+      case 'resume':
+        await resumeNativeIncomingTransfer(transferId)
+        break
+      case 'cancel':
+        await cancelNativeIncomingTransfer(transferId)
+        break
+    }
+    await refreshRecords()
+  }, [refreshRecords])
+
+  const withLocalFile = useCallback(async (record: TransmissionRecordDetail) => {
+    if (!record.sourceUri) throw new Error('LOCAL_FILE_UNAVAILABLE')
+    const file = new File(record.sourceUri)
+    if (!file.exists) throw new Error('LOCAL_FILE_UNAVAILABLE')
+    return file
+  }, [])
+
+  const handleOpenRecord = useCallback(async (record: TransmissionRecordDetail) => {
+    try {
+      const file = await withLocalFile(record)
+      await openNativeManagedFile(file.uri)
+    } catch (error) {
+      console.error(error)
+      Alert.alert('无法打开文件', '本地文件不可用，或设备上没有可打开此文件的应用。')
+    }
+  }, [withLocalFile])
+
+  const handleShareRecord = useCallback(async (record: TransmissionRecordDetail) => {
+    try {
+      if (!await Sharing.isAvailableAsync()) throw new Error('SHARING_UNAVAILABLE')
+      const file = await withLocalFile(record)
+      await Sharing.shareAsync(file.uri)
+    } catch (e) {
+      console.error(e)
+      Alert.alert('无法分享文件', '本地文件不可用，或系统当前不支持分享。')
+    }
+  }, [withLocalFile])
+
+  const handleCopyTextRecord = useCallback(async (record: TransmissionRecordDetail) => {
+    await Clipboard.setStringAsync(record.detail)
+    Alert.alert('已复制', '文字内容已复制到剪贴板。')
+  }, [])
+
+  const deleteRecord = useCallback(async (record: TransmissionRecordDetail) => {
+    try {
+      if (record.fileType === 'text') {
+        const messageId = /^text:(.+)$/.exec(record.id)?.[1]
+        if (!messageId) return
+        await deleteLocalTextMessage(messageId)
+      } else {
+        const incomingTransferId = /^incoming:([^:]+):/.exec(record.id)?.[1]
+        const outgoingTransferId = incomingTransferId ? null : /^([^:]+):/.exec(record.id)?.[1]
+        if (incomingTransferId && (record.status === 'transferring' || record.status === 'paused')) {
+          await cancelNativeIncomingTransfer(incomingTransferId)
+        }
+        if (incomingTransferId) {
+          await deleteNativeIncomingTransferFiles(incomingTransferId)
+          await deleteV3IncomingTransfer(incomingTransferId)
+        } else if (outgoingTransferId) {
+          await deleteNativeOutgoingTransferFiles(outgoingTransferId)
+          await deleteV3OutgoingTransfer(outgoingTransferId)
+        }
+      }
+      detailSheetRef.current?.dismiss()
+      await refreshRecords()
+    } catch {
+      Alert.alert('无法删除', '本地文件或传输记录删除失败，请刷新记录确认当前状态。')
+    }
+  }, [refreshRecords, withLocalFile])
+
+  const handleDeleteRecord = useCallback((record: TransmissionRecordDetail) => {
+    const isText = record.fileType === 'text'
+    Alert.alert(
+      isText ? '删除文字记录' : '删除文件和记录',
+      isText ? '此操作会删除本地文字记录。' : '此操作会删除本地文件及其传输记录。',
+      [
+        {style: 'cancel', text: '取消'},
+        {onPress: () => void deleteRecord(record), style: 'destructive', text: '删除'}
+      ]
+    )
+  }, [deleteRecord])
 
   return (
     <View style={[styles.screen, {backgroundColor: theme.backgroundElement}]}>
@@ -595,7 +759,7 @@ export default function TransmissionRecord() {
         scrollEventThrottle={16}
         showsHorizontalScrollIndicator={false}>
 
-        <View style={[styles.page, {width}]}> 
+        <View style={[styles.page, {width}]}>
           <FilteredRecordList
             filter={filter}
             normalizedQuery={normalizedQuery}
@@ -606,7 +770,7 @@ export default function TransmissionRecord() {
           />
         </View>
 
-        <View style={[styles.page, {width}]}> 
+        <View style={[styles.page, {width}]}>
           <FilteredRecordList
             filter={filter}
             normalizedQuery={normalizedQuery}
@@ -623,7 +787,13 @@ export default function TransmissionRecord() {
         onApply={setFilter}
         value={filter}
       />
-      <TransmissionRecordDetailBottomSheet ref={detailSheetRef}/>
+      <TransmissionRecordDetailBottomSheet
+        onCopyText={(record) => void handleCopyTextRecord(record)}
+        onDelete={handleDeleteRecord}
+        onIncomingControl={(record, operation) => void handleIncomingControl(record, operation)}
+        onOpen={(record) => void handleOpenRecord(record)}
+        onShare={(record) => void handleShareRecord(record)}
+        ref={detailSheetRef}/>
     </View>
   )
 }

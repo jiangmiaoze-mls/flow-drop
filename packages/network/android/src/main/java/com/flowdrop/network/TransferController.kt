@@ -4,7 +4,6 @@ import android.app.Activity
 import android.app.Application
 import android.content.Context
 import android.content.ComponentCallbacks2
-import android.content.Intent
 import android.content.res.Configuration
 import android.net.ConnectivityManager
 import android.net.Network
@@ -74,6 +73,8 @@ private const val MAX_JS_SAFE_INTEGER = 9_007_199_254_740_991L
 private const val MAX_TRANSFER_ITEMS = 32
 private const val MAX_FILE_NAME_LENGTH = 255
 private const val MAX_DIGEST_EVENT_BATCH = 1_000
+private const val MANAGED_FILES_DIRECTORY = "flowdrop-managed-files"
+private const val LEGACY_OUTGOING_DIRECTORY = "flowdrop-v3-outgoing"
 private val RECOVERY_REPAIR_DELAYS_MS = longArrayOf(500L, 1_000L, 2_000L, 5_000L)
 
 internal fun ackRepairThresholdMillis(roundTripTimeMs: Long): Long {
@@ -89,6 +90,45 @@ data class NativeTransferItem(
   val sizeBytes: Long,
   val sourceUri: String
 )
+
+data class NativeTransferSourceStageItem(
+  val itemId: String,
+  val name: String,
+  val sizeBytes: Long,
+  val sourceUri: String
+)
+
+data class NativeTransferSourceStageConfig(
+  val items: List<NativeTransferSourceStageItem>,
+  val transferId: String
+) {
+  companion object {
+    fun fromMap(value: Map<String, Any?>): NativeTransferSourceStageConfig {
+      val transferId = value["transferId"] as? String ?: throw IllegalArgumentException("Missing transferId.")
+      val rawItems = value["items"] as? List<*> ?: throw IllegalArgumentException("Transfer source items are required.")
+      require(transferId.matches(Regex("^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"))) { "Invalid transferId." }
+      require(rawItems.size in 1..MAX_TRANSFER_ITEMS) { "Invalid transfer source item count." }
+      val seenIds = mutableSetOf<String>()
+      val items = rawItems.map { raw ->
+        val item = raw as? Map<*, *> ?: throw IllegalArgumentException("Invalid transfer source item.")
+        val itemId = item["itemId"] as? String ?: throw IllegalArgumentException("Missing itemId.")
+        val name = item["name"] as? String ?: throw IllegalArgumentException("Missing name.")
+        val sourceUri = item["sourceUri"] as? String ?: throw IllegalArgumentException("Missing sourceUri.")
+        val sizeBytes = when (val size = item["sizeBytes"]) {
+          is Int -> size.toLong()
+          is Long -> size
+          is Double -> size.toLong().takeIf { size.isFinite() && size == it.toDouble() }
+          else -> null
+        } ?: throw IllegalArgumentException("Missing sizeBytes.")
+        require(itemId.matches(Regex("^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")) && seenIds.add(itemId)) { "Invalid itemId." }
+        require(name.isNotBlank() && name.length <= MAX_FILE_NAME_LENGTH && !name.any { it in "<>:\"/\\|?*" || it.code < 32 }) { "Invalid name." }
+        require(sourceUri.isNotBlank() && sizeBytes in 0..MAX_JS_SAFE_INTEGER) { "Invalid transfer source item." }
+        NativeTransferSourceStageItem(itemId, name, sizeBytes, sourceUri)
+      }
+      return NativeTransferSourceStageConfig(items, transferId)
+    }
+  }
+}
 
 /**
  * Metadata restored from React Native SQLite. This deliberately contains no
@@ -645,25 +685,22 @@ class TransferController(private val context: Context) : ComponentCallbacks2, Ap
     return replaceTransfer(config, requireExisting = false)
   }
 
-  /**
-   * ACTION_OPEN_DOCUMENT grants are otherwise process-scoped. Retain only the
-   * metadata URI permission here; byte staging remains in the I/O coroutine.
-   */
-  fun retainSourceUriPermissions(sourceUris: List<String>) {
-    sourceUris.forEach { rawUri ->
-      val uri = Uri.parse(rawUri)
-      when {
-        uri.scheme.equals("content", ignoreCase = true) -> {
-          try {
-            context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
-          } catch (error: SecurityException) {
-            throw IllegalArgumentException("FILE_ACCESS_NOT_PERSISTABLE", error)
-          }
-        }
-        uri.scheme.equals("file", ignoreCase = true) -> Unit
-        else -> throw IllegalArgumentException("FILE_ACCESS_NOT_PERSISTABLE")
-      }
+  /** Copies picker-owned sources before any metadata is persisted to SQLite. */
+  suspend fun stageTransferSources(config: NativeTransferSourceStageConfig): Map<String, String> = withContext(Dispatchers.IO) {
+    config.items.associate { item ->
+      val target = privateStagingFile(config.transferId, item.itemId, item.name)
+      val staged = stageSourceUri(item.sourceUri, item.sizeBytes, target)
+      item.itemId to Uri.fromFile(staged).toString()
     }
+  }
+
+  suspend fun deleteOutgoingTransferFiles(transferId: String) = withContext(Dispatchers.IO) {
+    require(transferId.matches(Regex("^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"))) { "Invalid transferId." }
+    if (!deletePrivateStaging(privateStagingDirectory(transferId))) throw IllegalStateException("PART_READ_ERROR")
+  }
+
+  fun cleanupLegacyTransferFiles() {
+    deletePrivateStaging(File(context.filesDir, LEGACY_OUTGOING_DIRECTORY))
   }
 
   /**
@@ -1060,26 +1097,26 @@ class TransferController(private val context: Context) : ComponentCallbacks2, Ap
       if (stagingFile.isFile && stagingFile.length() == item.sizeBytes) {
         return@withLock ContentChunkSource(stagingFile, item.sizeBytes)
       }
-      ContentChunkSource(stageSourceUri(record, item, stagingFile), item.sizeBytes)
+      ContentChunkSource(stageSourceUri(item.sourceUri, item.sizeBytes, stagingFile), item.sizeBytes)
     }
   }
 
   private suspend fun stageSourceUri(
-    record: TransferRecord,
-    item: NativeTransferItem,
+    sourceUri: String,
+    expectedSizeBytes: Long,
     stagingFile: File
   ): File = withContext(Dispatchers.IO) {
-    val directory = privateStagingDirectory(record)
+    val directory = stagingFile.parentFile ?: throw TransferRequestException("PART_READ_ERROR")
     if (!directory.exists() && !directory.mkdirs()) {
       throw TransferRequestException("PART_READ_ERROR")
     }
     if (!directory.isDirectory) throw TransferRequestException("PART_READ_ERROR")
 
-    val temporaryFile = File(directory, ".${item.itemId}.${UUID.randomUUID()}.tmp")
+    val temporaryFile = File(directory, ".${stagingFile.name}.${UUID.randomUUID()}.tmp")
     var sourceOpened = false
     try {
       val input = try {
-        context.contentResolver.openInputStream(Uri.parse(item.sourceUri))
+        context.contentResolver.openInputStream(Uri.parse(sourceUri))
       } catch (error: IOException) {
         throw TransferRequestException("FILE_CHANGED", error)
       } catch (error: SecurityException) {
@@ -1099,7 +1136,7 @@ class TransferController(private val context: Context) : ComponentCallbacks2, Ap
               if (read == 0) continue
               target.write(buffer, 0, read)
               copiedBytes += read
-              if (copiedBytes > item.sizeBytes) throw TransferRequestException("FILE_CHANGED")
+              if (copiedBytes > expectedSizeBytes) throw TransferRequestException("FILE_CHANGED")
             }
             target.fd.sync()
           }
@@ -1109,7 +1146,7 @@ class TransferController(private val context: Context) : ComponentCallbacks2, Ap
           throw TransferRequestException("PART_READ_ERROR", error)
         }
       }
-      if (copiedBytes != item.sizeBytes) throw TransferRequestException("FILE_CHANGED")
+      if (copiedBytes != expectedSizeBytes) throw TransferRequestException("FILE_CHANGED")
       coroutineContext.ensureActive()
       if (stagingFile.exists() && !stagingFile.delete()) throw TransferRequestException("PART_READ_ERROR")
       if (!temporaryFile.renameTo(stagingFile)) throw TransferRequestException("PART_READ_ERROR")
@@ -1125,12 +1162,16 @@ class TransferController(private val context: Context) : ComponentCallbacks2, Ap
     }
   }
 
-  private fun privateStagingDirectory(record: TransferRecord): File {
-    return File(File(context.filesDir, "flowdrop-v3-outgoing"), record.config.transferId)
+  private fun privateStagingDirectory(transferId: String): File {
+    return File(File(File(context.filesDir, MANAGED_FILES_DIRECTORY), "outgoing"), transferId)
   }
 
   private fun privateStagingFile(record: TransferRecord, item: NativeTransferItem): File {
-    return File(privateStagingDirectory(record), "${item.itemId}.part")
+    return privateStagingFile(record.config.transferId, item.itemId, item.name)
+  }
+
+  private fun privateStagingFile(transferId: String, itemId: String, name: String): File {
+    return File(privateStagingDirectory(transferId), "${itemId}-${name}")
   }
 
   private fun cleanupTerminalStaging(record: TransferRecord, errorCode: String?) {
@@ -1151,7 +1192,7 @@ class TransferController(private val context: Context) : ComponentCallbacks2, Ap
       withContext(Dispatchers.IO) {
         synchronized(stagingLock) {
           if (records[record.config.transferId] !== record) return@synchronized true
-          deletePrivateStaging(privateStagingDirectory(record))
+          true
         }
       }
     }

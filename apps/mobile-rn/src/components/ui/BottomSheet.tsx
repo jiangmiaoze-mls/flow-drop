@@ -4,6 +4,7 @@ import React, {
   type RefObject,
   useCallback,
   useContext,
+  useEffect,
   useImperativeHandle,
   useRef,
   useState
@@ -24,7 +25,8 @@ import {
   type ViewStyle
 } from 'react-native'
 
-const { height: SCREEN_HEIGHT } = Dimensions.get('window')
+
+const {height: SCREEN_HEIGHT} = Dimensions.get('window')
 
 type BottomSheetContextType = {
   translateY: Animated.Value
@@ -65,6 +67,14 @@ const BottomSheetComponent = forwardRef<BottomSheetRef, BottomSheetProps>(
     const opacity = useRef(new Animated.Value(0)).current
     const isScrollAtTopRef = useRef(true)
     const touchFlagRef = useRef(false)
+    const isMountedRef = useRef(false)
+
+    useEffect(() => {
+      isMountedRef.current = true
+      return () => {
+        isMountedRef.current = false
+      }
+    }, [])
 
     const dismiss = useCallback(() => {
       Animated.parallel([
@@ -79,13 +89,17 @@ const BottomSheetComponent = forwardRef<BottomSheetRef, BottomSheetProps>(
           duration: 250,
           useNativeDriver: true
         })
-      ]).start(() => {
+      ]).start(({finished}) => {
+        if (!finished || !isMountedRef.current) return
+
         setVisible(false)
         onDismiss?.()
       })
     }, [opacity, translateY, onDismiss])
 
     const present = useCallback(() => {
+      if (!isMountedRef.current) return
+
       setVisible(true)
       translateY.setValue(SCREEN_HEIGHT)
       opacity.setValue(0)
@@ -105,7 +119,7 @@ const BottomSheetComponent = forwardRef<BottomSheetRef, BottomSheetProps>(
       ]).start()
     }, [opacity, translateY])
 
-    useImperativeHandle(ref, () => ({ dismiss, present }), [dismiss, present])
+    useImperativeHandle(ref, () => ({dismiss, present}), [dismiss, present])
 
     // 外层 Pan 回归正常配置：绝不主动抢首个事件，只靠 Move 拦截，保护 ScrollView
     const panResponder = useRef(
@@ -147,13 +161,13 @@ const BottomSheetComponent = forwardRef<BottomSheetRef, BottomSheetProps>(
         transparent
         visible={visible}
       >
-        <Animated.View style={[styles.backdrop, { opacity }]}>
-          <Pressable onPress={dismiss} style={StyleSheet.absoluteFill} />
+        <Animated.View style={[styles.backdrop, {opacity}]}>
+          <Pressable onPress={dismiss} style={StyleSheet.absoluteFill}/>
         </Animated.View>
 
         <View pointerEvents="box-none" style={styles.sheetContainer}>
           <BottomSheetContext.Provider
-            value={{ translateY, dismiss, isScrollAtTopRef, touchFlagRef }}
+            value={{translateY, dismiss, isScrollAtTopRef, touchFlagRef}}
           >
             <Animated.View
               {...panResponder.panHandlers}
@@ -162,13 +176,12 @@ const BottomSheetComponent = forwardRef<BottomSheetRef, BottomSheetProps>(
                 {
                   backgroundColor,
                   maxHeight,
-                  transform: [{ translateY }]
-                },
-                contentStyle
+                  transform: [{translateY}]
+                }
               ]}
             >
               <View
-                style={styles.contentContainer}
+                style={[styles.contentContainer, contentStyle]}
                 // 【核心：智能识别】
                 // 1. 在触摸刚按下的捕获阶段（最先执行），重置 Flag
                 onStartShouldSetResponderCapture={() => {
@@ -221,7 +234,7 @@ const BottomSheetScrollView = forwardRef<ScrollView, ScrollViewProps>(
 
       startedAtTop.current = currentOffsetY.current <= 1
       if (startedAtTop.current) {
-        scrollRef.current?.setNativeProps({ scrollEnabled: false })
+        scrollRef.current?.setNativeProps({scrollEnabled: false})
         if (context) context.isScrollAtTopRef.current = true
       }
 
@@ -244,7 +257,7 @@ const BottomSheetScrollView = forwardRef<ScrollView, ScrollViewProps>(
           context.translateY.setValue(dy)
         } else if (dy < -2) {
           startedAtTop.current = false
-          scrollRef.current?.setNativeProps({ scrollEnabled: true })
+          scrollRef.current?.setNativeProps({scrollEnabled: true})
         }
       }
 
@@ -252,7 +265,7 @@ const BottomSheetScrollView = forwardRef<ScrollView, ScrollViewProps>(
     }
 
     const endDrag = (dy: number) => {
-      scrollRef.current?.setNativeProps({ scrollEnabled: true })
+      scrollRef.current?.setNativeProps({scrollEnabled: true})
       startedAtTop.current = false
 
       if (!isDraggingSheet.current || !context) return
@@ -326,12 +339,12 @@ const styles = StyleSheet.create({
   },
   sheetContent: {
     borderTopLeftRadius: 18,
-    borderTopRightRadius: 18,
+    borderTopRightRadius: 18
   },
   contentContainer: {
     flexShrink: 1,
     paddingBottom: 34,
-    paddingTop: 22, // 维持在这里，确保顶部空白也能被父容器兜底
+    paddingTop: 22 // 维持在这里，确保顶部空白也能被父容器兜底
   },
   scrollViewWrapper: {
     flexShrink: 1

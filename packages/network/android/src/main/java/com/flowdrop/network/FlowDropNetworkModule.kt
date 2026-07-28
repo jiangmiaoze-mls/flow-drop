@@ -1,6 +1,8 @@
 package com.flowdrop.network
 
 import android.content.Context
+import android.content.Intent
+import android.net.Uri
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.net.wifi.WifiManager
@@ -9,6 +11,9 @@ import expo.modules.kotlin.functions.Coroutine
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
 import java.net.Inet4Address
+import java.io.File
+import java.net.URLConnection
+import androidx.core.content.FileProvider
 
 class FlowDropNetworkModule : Module() {
   private val context: Context
@@ -16,7 +21,14 @@ class FlowDropNetworkModule : Module() {
 
   override fun definition() = ModuleDefinition {
     Name("FlowDropNetwork")
-    Events("transferState", "transferProgress", "transferFailure", "transferChunkDigests")
+    Events(
+      "transferState",
+      "transferProgress",
+      "transferFailure",
+      "transferChunkDigests",
+      "incomingTransferState",
+      "incomingTransferFailure"
+    )
 
     AsyncFunction("getWifiIPv4BroadcastTargetAsync") {
       val wifiManager = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
@@ -47,8 +59,43 @@ class FlowDropNetworkModule : Module() {
       transferController().reconcileCancelledTransfer(NativeTransferConfig.fromMap(config))
     }
 
-    AsyncFunction("retainTransferSourceUris") Coroutine { sourceUris: List<String> ->
-      transferController().retainSourceUriPermissions(sourceUris)
+    AsyncFunction("stageTransferSources") Coroutine { config: Map<String, Any?> ->
+      transferController().stageTransferSources(NativeTransferSourceStageConfig.fromMap(config))
+    }
+
+    AsyncFunction("deleteOutgoingTransferFiles") Coroutine { transferId: String ->
+      transferController().deleteOutgoingTransferFiles(transferId)
+    }
+
+    AsyncFunction("deleteIncomingTransferFiles") Coroutine { transferId: String ->
+      receiveController().deleteIncomingTransferFiles(transferId)
+    }
+
+    AsyncFunction("cleanupLegacyTransferFiles") {
+      transferController().cleanupLegacyTransferFiles()
+      receiveController().cleanupLegacyTransferFiles()
+    }
+
+    AsyncFunction("openManagedFile") { fileUri: String ->
+      val uri = Uri.parse(fileUri)
+      if (uri.scheme != "file" || uri.path.isNullOrBlank()) throw IllegalArgumentException("LOCAL_FILE_UNAVAILABLE")
+      val file = File(uri.path!!)
+      val managedRoot = File(context.filesDir, "flowdrop-managed-files").canonicalFile
+      val canonicalFile = file.canonicalFile
+      if (!canonicalFile.path.startsWith(managedRoot.path + File.separator) || !canonicalFile.isFile) {
+        throw IllegalArgumentException("LOCAL_FILE_UNAVAILABLE")
+      }
+      val contentUri = FileProvider.getUriForFile(
+        context,
+        "${context.packageName}.FileSystemFileProvider",
+        canonicalFile
+      )
+      val mimeType = URLConnection.guessContentTypeFromName(canonicalFile.name) ?: "*/*"
+      val intent = Intent(Intent.ACTION_VIEW)
+        .setDataAndType(contentUri, mimeType)
+        .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+      if (intent.resolveActivity(context.packageManager) == null) throw IllegalArgumentException("NO_FILE_VIEWER")
+      context.startActivity(intent)
     }
 
     AsyncFunction("pauseTransfer") Coroutine { transferId: String ->
@@ -67,10 +114,36 @@ class FlowDropNetworkModule : Module() {
       transferController().snapshot(transferId)
     }
 
+    AsyncFunction("startIncomingTransfer") Coroutine { config: Map<String, Any?> ->
+      receiveController().start(NativeIncomingTransferConfig.fromMap(config))
+    }
+
+    AsyncFunction("pauseIncomingTransfer") Coroutine { transferId: String ->
+      receiveController().pause(transferId)
+    }
+
+    AsyncFunction("resumeIncomingTransfer") Coroutine { transferId: String ->
+      receiveController().resume(transferId)
+    }
+
+    AsyncFunction("cancelIncomingTransfer") Coroutine { transferId: String ->
+      receiveController().cancel(transferId)
+    }
+
+    AsyncFunction("getIncomingTransferSnapshots") {
+      receiveController().snapshots()
+    }
+
   }
 
   private fun transferController(): TransferController {
     return TransferControllerRegistry.get(context.applicationContext) { eventName, payload ->
+      sendEvent(eventName, payload)
+    }
+  }
+
+  private fun receiveController(): ReceiveController {
+    return ReceiveControllerRegistry.get(context.applicationContext) { eventName, payload ->
       sendEvent(eventName, payload)
     }
   }

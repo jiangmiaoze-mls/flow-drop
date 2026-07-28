@@ -55,7 +55,47 @@ export function createAdminApp(peer: FastifyInstance): FastifyInstance {
     }
   })
 
-  admin.get('/api/file-demo/transfers', async () => ({transfers: localFileDemoStore.list()}))
+  admin.get('/api/file-demo/transfers', async () => {
+    const outgoingById = new Map((await peer.v3OutgoingTransferService.listForAdmin())
+      .map((transfer) => [transfer.transferId, transfer]))
+    return {
+      transfers: localFileDemoStore.list().map((transfer) => ({
+        ...transfer,
+        outgoingTransfer: transfer.outgoingTransferId ? outgoingById.get(transfer.outgoingTransferId) : undefined
+      }))
+    }
+  })
+  admin.get('/api/outgoing-transfers', async () => ({transfers: await peer.v3OutgoingTransferService.listForAdmin()}))
+
+  admin.post('/api/outgoing-transfers', async (request, reply) => {
+    const body = request.body as {fileDemoTransferId?: unknown; recipientDeviceId?: unknown}
+    if (typeof body?.fileDemoTransferId !== 'string' || typeof body.recipientDeviceId !== 'string') {
+      return reply.code(400).send({message: 'A queued file and recipient device are required.'})
+    }
+    const source = localFileDemoStore.getOutgoingSource(body.fileDemoTransferId)
+    if (!source) return reply.code(404).send({message: 'The queued source file was not found.'})
+    if (!peer.trustedDeviceStore.get(body.recipientDeviceId)) {
+      return reply.code(404).send({message: 'The recipient is not a trusted device.'})
+    }
+    try {
+      const offer = await peer.v3OutgoingTransferService.create({
+        items: [{
+          itemId: crypto.randomUUID(),
+          mimeType: source.mimeType,
+          name: source.fileName,
+          sourcePath: source.sourcePath
+        }],
+        recipientDeviceId: body.recipientDeviceId
+      })
+      localFileDemoStore.linkOutgoingTransfer(body.fileDemoTransferId, offer.transferId)
+      await peer.peerConnectionManager.sendOutgoingOffer(body.recipientDeviceId, offer.transferId)
+      peer.agentEventBus.publish({payload: {revision: offer.revision, transferId: offer.transferId}, type: 'transfer.changed'})
+      return reply.code(201).send({offer})
+    } catch (error) {
+      const statusCode = error instanceof V3TransportError ? error.statusCode : 400
+      return reply.code(statusCode).send({message: error instanceof Error ? error.message : 'Unable to queue outgoing transfer.'})
+    }
+  })
 
   admin.post('/api/file-demo/:direction', async (request, reply) => {
     const {direction} = request.params as {direction: string}

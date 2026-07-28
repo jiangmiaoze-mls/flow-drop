@@ -58,6 +58,26 @@ export type NativeTransferStartConfig = {
   transferSecretHex: string
 }
 
+export type NativeIncomingTransferItem = {
+  contentRoot: string
+  itemId: string
+  mimeType: string
+  name: string
+  sizeBytes: number
+}
+
+/** Metadata-only Agent-to-Android offer. Native code owns all downloaded bytes. */
+export type NativeIncomingTransferStartConfig = {
+  chunkSizeBytes: number
+  items: NativeIncomingTransferItem[]
+  peerAddress: string
+  peerControlPort: number
+  recipientDeviceId: string
+  revision: number
+  transferId: string
+  transferSecretHex: string
+}
+
 export type NativeTransferSnapshot = {
   chunkDigestMismatches?: NativeChunkDigestMismatch[]
   confirmedBytes: number
@@ -128,22 +148,45 @@ export type NativeTransferControlResponse = {
   status: 'paused' | 'transferring' | 'cancelled'
 }
 
+export type NativeIncomingTransferEvent = {
+  confirmedBytes: number
+  errorCode?: string
+  localUris?: Record<string, string>
+  revision: number
+  status: 'cancelled' | 'completed' | 'failed' | 'paused' | 'transferring'
+  transferId: string
+}
+
+export type NativeTransferSourceStageConfig = {
+  items: Array<Pick<NativeTransferItemConfig, 'itemId' | 'name' | 'sizeBytes' | 'sourceUri'>>
+  transferId: string
+}
+
 export type NativeTransferEventSubscription = {
   remove(): void
 }
 
-type NativeTransferEventName = 'transferChunkDigests' | 'transferFailure' | 'transferProgress' | 'transferState'
+type NativeTransferEventName = 'incomingTransferFailure' | 'incomingTransferState' | 'transferChunkDigests' | 'transferFailure' | 'transferProgress' | 'transferState'
 
 type FlowDropNetworkTransferModule = {
   addListener?: (eventName: NativeTransferEventName, listener: (event: unknown) => void) => NativeTransferEventSubscription
   cancelTransfer?: (transferId: string) => Promise<NativeTransferControlResponse>
+  cancelIncomingTransfer?: (transferId: string) => Promise<void>
   getTransferSnapshot?: (transferId: string) => Promise<NativeTransferSnapshot | null>
+  getIncomingTransferSnapshots?: () => Promise<NativeIncomingTransferEvent[]>
   pauseTransfer?: (transferId: string) => Promise<NativeTransferControlResponse>
+  pauseIncomingTransfer?: (transferId: string) => Promise<void>
   reconcileCancelledTransfer?: (config: NativeTransferStartConfig) => Promise<NativeTransferSnapshot>
-  retainTransferSourceUris?: (sourceUris: string[]) => Promise<void>
+  stageTransferSources?: (config: NativeTransferSourceStageConfig) => Promise<Record<string, string>>
+  deleteIncomingTransferFiles?: (transferId: string) => Promise<void>
+  deleteOutgoingTransferFiles?: (transferId: string) => Promise<void>
+  cleanupLegacyTransferFiles?: () => Promise<void>
+  openManagedFile?: (fileUri: string) => Promise<void>
   restartTransferForRecovery?: (config: NativeTransferStartConfig) => Promise<string>
   resumeTransfer?: (transferId: string) => Promise<NativeTransferControlResponse>
+  resumeIncomingTransfer?: (transferId: string) => Promise<void>
   startTransfer?: (config: NativeTransferStartConfig) => Promise<string>
+  startIncomingTransfer?: (config: NativeIncomingTransferStartConfig) => Promise<string>
 }
 
 const flowDropNetwork = requireOptionalNativeModule<FlowDropNetworkTransferModule>('FlowDropNetwork')
@@ -166,7 +209,7 @@ export function isNativeTransferControllerAvailable(): boolean {
       && typeof flowDropNetwork.cancelTransfer === 'function'
       && typeof flowDropNetwork.getTransferSnapshot === 'function'
       && typeof flowDropNetwork.reconcileCancelledTransfer === 'function'
-      && typeof flowDropNetwork.retainTransferSourceUris === 'function'
+      && typeof flowDropNetwork.stageTransferSources === 'function'
       && typeof flowDropNetwork.restartTransferForRecovery === 'function'
       && typeof flowDropNetwork.addListener === 'function'
   )
@@ -174,6 +217,32 @@ export function isNativeTransferControllerAvailable(): boolean {
 
 export async function startNativeTransfer(config: NativeTransferStartConfig): Promise<string> {
   return requireNativeTransferController().startTransfer(config)
+}
+
+export async function startNativeIncomingTransfer(config: NativeIncomingTransferStartConfig): Promise<string> {
+  const module = requireNativeTransferController()
+  if (typeof module.startIncomingTransfer !== 'function') {
+    throw new NativeTransferControllerError('NATIVE_TRANSFER_UNAVAILABLE')
+  }
+  return module.startIncomingTransfer(config)
+}
+
+export async function pauseNativeIncomingTransfer(transferId: string): Promise<void> {
+  const module = requireNativeTransferController()
+  if (typeof module.pauseIncomingTransfer !== 'function') throw new NativeTransferControllerError('NATIVE_TRANSFER_UNAVAILABLE')
+  await module.pauseIncomingTransfer(transferId)
+}
+
+export async function resumeNativeIncomingTransfer(transferId: string): Promise<void> {
+  const module = requireNativeTransferController()
+  if (typeof module.resumeIncomingTransfer !== 'function') throw new NativeTransferControllerError('NATIVE_TRANSFER_UNAVAILABLE')
+  await module.resumeIncomingTransfer(transferId)
+}
+
+export async function cancelNativeIncomingTransfer(transferId: string): Promise<void> {
+  const module = requireNativeTransferController()
+  if (typeof module.cancelIncomingTransfer !== 'function') throw new NativeTransferControllerError('NATIVE_TRANSFER_UNAVAILABLE')
+  await module.cancelIncomingTransfer(transferId)
 }
 
 export async function restartNativeTransferForRecovery(config: NativeTransferStartConfig): Promise<string> {
@@ -184,8 +253,33 @@ export async function reconcileNativeCancelledTransfer(config: NativeTransferSta
   return requireNativeTransferController().reconcileCancelledTransfer(config)
 }
 
-export async function retainNativeTransferSourceUris(sourceUris: string[]): Promise<void> {
-  return requireNativeTransferController().retainTransferSourceUris(sourceUris)
+export async function stageNativeTransferSources(config: NativeTransferSourceStageConfig): Promise<Record<string, string>> {
+  const module = requireNativeTransferController()
+  if (typeof module.stageTransferSources !== 'function') throw new NativeTransferControllerError('NATIVE_TRANSFER_UNAVAILABLE')
+  return module.stageTransferSources(config)
+}
+
+export async function deleteNativeIncomingTransferFiles(transferId: string): Promise<void> {
+  const module = requireNativeTransferController()
+  if (typeof module.deleteIncomingTransferFiles !== 'function') throw new NativeTransferControllerError('NATIVE_TRANSFER_UNAVAILABLE')
+  await module.deleteIncomingTransferFiles(transferId)
+}
+
+export async function deleteNativeOutgoingTransferFiles(transferId: string): Promise<void> {
+  const module = requireNativeTransferController()
+  if (typeof module.deleteOutgoingTransferFiles !== 'function') throw new NativeTransferControllerError('NATIVE_TRANSFER_UNAVAILABLE')
+  await module.deleteOutgoingTransferFiles(transferId)
+}
+
+export async function cleanupLegacyNativeTransferFiles(): Promise<void> {
+  if (!flowDropNetwork || typeof flowDropNetwork.cleanupLegacyTransferFiles !== 'function') return
+  await flowDropNetwork.cleanupLegacyTransferFiles()
+}
+
+export async function openNativeManagedFile(fileUri: string): Promise<void> {
+  const module = requireNativeTransferController()
+  if (typeof module.openManagedFile !== 'function') throw new NativeTransferControllerError('NATIVE_TRANSFER_UNAVAILABLE')
+  await module.openManagedFile(fileUri)
 }
 
 export async function pauseNativeTransfer(transferId: string): Promise<NativeTransferControlResponse> {
@@ -202,6 +296,12 @@ export async function cancelNativeTransfer(transferId: string): Promise<NativeTr
 
 export async function getNativeTransferSnapshot(transferId: string): Promise<NativeTransferSnapshot | null> {
   return requireNativeTransferController().getTransferSnapshot(transferId)
+}
+
+export async function getNativeIncomingTransferSnapshots(): Promise<NativeIncomingTransferEvent[]> {
+  const module = requireNativeTransferController()
+  if (typeof module.getIncomingTransferSnapshots !== 'function') return []
+  return module.getIncomingTransferSnapshots()
 }
 
 export function addNativeTransferStateListener(
@@ -226,6 +326,18 @@ export function addNativeTransferChunkDigestListener(
   listener: (event: NativeTransferChunkDigestEvent) => void
 ): NativeTransferEventSubscription {
   return addNativeTransferListener('transferChunkDigests', listener)
+}
+
+export function addNativeIncomingTransferStateListener(
+  listener: (event: NativeIncomingTransferEvent) => void
+): NativeTransferEventSubscription {
+  return addNativeTransferListener('incomingTransferState', listener)
+}
+
+export function addNativeIncomingTransferFailureListener(
+  listener: (event: NativeIncomingTransferEvent) => void
+): NativeTransferEventSubscription {
+  return addNativeTransferListener('incomingTransferFailure', listener)
 }
 
 function addNativeTransferListener<TEvent>(

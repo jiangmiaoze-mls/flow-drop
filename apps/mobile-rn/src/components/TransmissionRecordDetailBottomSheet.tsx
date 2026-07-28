@@ -44,15 +44,17 @@ export type TransmissionRecordDetailBottomSheetRef = {
 }
 
 type TransmissionRecordDetailBottomSheetProps = {
+  onIncomingControl?: (record: TransmissionRecordDetail, operation: 'cancel' | 'pause' | 'resume') => void
+  onCopyText?: (record: TransmissionRecordDetail) => void
   onDelete?: (record: TransmissionRecordDetail) => void
-  onOpenFolder?: (record: TransmissionRecordDetail) => void
+  onOpen?: (record: TransmissionRecordDetail) => void
   onShare?: (record: TransmissionRecordDetail) => void
 }
 
 const TransmissionRecordDetailBottomSheet = forwardRef<
   TransmissionRecordDetailBottomSheetRef,
   TransmissionRecordDetailBottomSheetProps
->(function TransmissionRecordDetailBottomSheet({onDelete, onOpenFolder, onShare}, ref) {
+>(function TransmissionRecordDetailBottomSheet({onCopyText, onDelete, onIncomingControl, onOpen, onShare}, ref) {
   const theme = useTheme()
   const bottomSheetRef = useRef<BottomSheetRef>(null)
   const [record, setRecord] = useState<TransmissionRecordDetail | null>(null)
@@ -79,6 +81,9 @@ const TransmissionRecordDetailBottomSheet = forwardRef<
   const senderIcon = isSent ? PHONE_ICON : LAPTOP_ICON
   const receiverIcon = isSent ? LAPTOP_ICON : PHONE_ICON
   const isFailure = record.status === 'failed'
+  const canControlIncoming = record.direction === 'receive' && (record.status === 'transferring' || record.status === 'paused')
+  const isText = record.fileType === 'text'
+  const hasLocalFile = Boolean(record.sourceUri)
   const statusColor = isSuccess ? '#168A43' : isFailure ? '#E5484D' : '#3468C0'
   const statusDotColor = isSuccess ? '#2DC866' : isFailure ? '#F04449' : '#4C82D9'
 
@@ -134,7 +139,7 @@ const TransmissionRecordDetailBottomSheet = forwardRef<
           </DetailRow>
           {
             record.sourceUri &&
-            <DetailRow label="本机暂存" last>
+            <DetailRow label="本地文件" last>
               <Text numberOfLines={2} style={[styles.locationText, {color: theme.text}]}>
                 {record.sourceUri}
               </Text>
@@ -142,36 +147,74 @@ const TransmissionRecordDetailBottomSheet = forwardRef<
           }
         </View>
 
-        {onDelete || onOpenFolder || onShare ? <View style={styles.actions}>
+        {canControlIncoming ? <View style={styles.incomingActions}>
           <Pressable
-            accessibilityLabel="查看文件夹"
+            accessibilityLabel={record.status === 'paused' ? '继续接收' : '暂停接收'}
             accessibilityRole="button"
-            onPress={() => onOpenFolder?.(record)}
+            onPress={() => onIncomingControl?.(record, record.status === 'paused' ? 'resume' : 'pause')}
+            style={({pressed}) => [styles.incomingControlButton, {backgroundColor: theme.backgroundElement}, pressed && styles.pressed]}>
+            <SymbolView name={record.status === 'paused'
+              ? {ios: 'play.fill', android: 'play_arrow', web: 'play_arrow'}
+              : {ios: 'pause.fill', android: 'pause', web: 'pause'}} size={21} tintColor={theme.text}/>
+            <Text style={[styles.incomingControlText, {color: theme.text}]}>{record.status === 'paused' ? '继续' : '暂停'}</Text>
+          </Pressable>
+          <Pressable
+            accessibilityLabel="取消接收"
+            accessibilityRole="button"
+            onPress={() => onIncomingControl?.(record, 'cancel')}
+            style={({pressed}) => [styles.incomingControlButton, {backgroundColor: '#FDE8E7'}, pressed && styles.pressed]}>
+            <SymbolView name={{ios: 'xmark', android: 'close', web: 'close'}} size={21} tintColor="#E5484D"/>
+            <Text style={[styles.incomingControlText, {color: '#E5484D'}]}>取消</Text>
+          </Pressable>
+        </View> : null}
+
+        {isText ? <View style={styles.actions}>
+          <Pressable
+            accessibilityLabel="复制文字"
+            accessibilityRole="button"
+            onPress={() => onCopyText?.(record)}
             style={({pressed}) => [styles.primaryButton, pressed && styles.pressed]}>
-            <SymbolView name={{ios: 'folder', android: 'folder', web: 'folder'}} size={23} tintColor="#FFFFFF"/>
-            <Text style={styles.primaryButtonText}>查看文件夹</Text>
+            <SymbolView name={{ios: 'doc.on.doc', android: 'content_copy', web: 'content_copy'}} size={23} tintColor="#FFFFFF"/>
+            <Text style={styles.primaryButtonText}>复制</Text>
+          </Pressable>
+          <Pressable
+            accessibilityLabel="删除文字记录"
+            accessibilityRole="button"
+            onPress={() => onDelete?.(record)}
+            style={({pressed}) => [styles.textDeleteButton, {backgroundColor: theme.backgroundElement}, pressed && styles.pressed]}>
+            <SymbolView name={{ios: 'trash', android: 'delete', web: 'delete'}} size={21} tintColor="#F04449"/>
+            <Text style={[styles.secondaryButtonText, {color: '#F04449'}]}>删除</Text>
+          </Pressable>
+        </View> : <View style={styles.actions}>
+          <Pressable
+            accessibilityLabel="打开文件"
+            accessibilityRole="button"
+            disabled={!hasLocalFile}
+            onPress={() => onOpen?.(record)}
+            style={({pressed}) => [styles.primaryButton, !hasLocalFile && styles.disabled, pressed && styles.pressed]}>
+            <SymbolView name={{ios: 'arrow.up.forward.app', android: 'open_in_new', web: 'open_in_new'}} size={23} tintColor="#FFFFFF"/>
+            <Text style={styles.primaryButtonText}>打开</Text>
           </Pressable>
           <View style={styles.secondaryActions}>
             <Pressable
               accessibilityLabel="分享文件"
               accessibilityRole="button"
+              disabled={!hasLocalFile}
               onPress={() => onShare?.(record)}
-              style={({pressed}) => [styles.secondaryButton, {backgroundColor: theme.backgroundElement}, pressed && styles.pressed]}>
-              <SymbolView name={{ios: 'square.and.arrow.up', android: 'share', web: 'share'}}
-                          size={21}
-                          tintColor={theme.text}/>
-              <Text style={[styles.secondaryButtonText, {color: theme.text}]}>分享文件</Text>
+              style={({pressed}) => [styles.secondaryButton, {backgroundColor: theme.backgroundElement}, !hasLocalFile && styles.disabled, pressed && styles.pressed]}>
+              <SymbolView name={{ios: 'square.and.arrow.up', android: 'share', web: 'share'}} size={21} tintColor={theme.text}/>
+              <Text style={[styles.secondaryButtonText, {color: theme.text}]}>分享</Text>
             </Pressable>
             <Pressable
-              accessibilityLabel="删除记录"
+              accessibilityLabel="删除文件和记录"
               accessibilityRole="button"
               onPress={() => onDelete?.(record)}
               style={({pressed}) => [styles.secondaryButton, {backgroundColor: theme.backgroundElement}, pressed && styles.pressed]}>
               <SymbolView name={{ios: 'trash', android: 'delete', web: 'delete'}} size={21} tintColor="#F04449"/>
-              <Text style={[styles.secondaryButtonText, {color: '#F04449'}]}>删除记录</Text>
+              <Text style={[styles.secondaryButtonText, {color: '#F04449'}]}>删除</Text>
             </Pressable>
           </View>
-        </View> : null}
+        </View>}
       </BottomSheet.ScrollView>
     </BottomSheet>
   )
@@ -358,6 +401,22 @@ const styles = StyleSheet.create({
     marginHorizontal: PAGE_HORIZONTAL_PADDING,
     marginTop: 18
   },
+  incomingActions: {
+    flexDirection: 'row',
+    gap: 12,
+    marginHorizontal: PAGE_HORIZONTAL_PADDING,
+    marginTop: 18
+  },
+  incomingControlButton: {
+    alignItems: 'center',
+    borderRadius: 8,
+    flex: 1,
+    flexDirection: 'row',
+    gap: 8,
+    height: 48,
+    justifyContent: 'center'
+  },
+  incomingControlText: {fontSize: 16, fontWeight: '700'},
   primaryButton: {
     alignItems: 'center',
     backgroundColor: '#050505',
@@ -390,6 +449,16 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '700'
   },
+  textDeleteButton: {
+    alignItems: 'center',
+    borderRadius: 12,
+    flexDirection: 'row',
+    gap: 8,
+    height: 58,
+    justifyContent: 'center',
+    marginTop: 12
+  },
+  disabled: {opacity: 0.42},
   pressed: {
     opacity: 0.72
   }

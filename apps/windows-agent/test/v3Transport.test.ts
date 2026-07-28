@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import {createHash} from 'node:crypto'
-import {existsSync, mkdtempSync, readFileSync, rmSync} from 'node:fs'
+import {existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync} from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import {DatabaseSync} from 'node:sqlite'
@@ -15,6 +15,7 @@ import {calculateV3ContentRootFromHexDigests} from '../src/transfers/v3ContentRo
 import {migrateV3TransferDatabase, rollbackLatestV3TransferMigration} from '../src/transfers/v3Migration'
 import {V3TransferAuthenticator, createV3RequestSignature} from '../src/transfers/v3TransferAuthenticator'
 import {V3TransferService} from '../src/transfers/v3TransferService'
+import {V3OutgoingTransferService} from '../src/transfers/v3OutgoingTransferService'
 import {type V3ChunkMetadata, V3TransferStore} from '../src/transfers/v3TransferStore'
 import {V3TrustedDeviceAccessClient} from '../src/transfers/v3TrustedDeviceAccess'
 import {registerLegacyTransferGoneRoutes, v3TransportRoutes} from '../src/transfers/v3TransportRoutes'
@@ -26,6 +27,7 @@ type Fixture = {
   app: FastifyInstance
   cleanup: () => Promise<void>
   eventBus: AgentEventBus
+  outgoingTransferService: V3OutgoingTransferService
   root: string
   trustedDeviceStore: TrustedDeviceStore
 }
@@ -93,6 +95,63 @@ test('returns 410 for every retired transfer endpoint before authentication', as
       assert.equal(response.statusCode, 410, `${request.method} ${request.url}`)
       assert.deepEqual(response.json(), {code: 'TRANSFER_PROTOCOL_GONE'})
     }
+  } finally {
+    await fixture.cleanup()
+  }
+})
+
+test('serves authenticated outgoing chunks as raw bytes and accepts canonical durable acknowledgements', async () => {
+  const fixture = await createFixture()
+  try {
+    const sourcePath = path.join(fixture.root, 'outgoing-source.bin')
+    const source = Buffer.alloc(1024 * 1024, 0x4d)
+    writeFileSync(sourcePath, source)
+    const offer = await fixture.outgoingTransferService.create({
+      items: [{
+        itemId: 'outgoing-item-001',
+        mimeType: 'application/octet-stream',
+        name: 'outgoing-source.bin',
+        sourcePath
+      }],
+      recipientDeviceId: DEVICE_ID,
+      transferId: 'outgoing-transfer-001'
+    })
+    const statusPath = `/v3/outgoing-transfers/${offer.transferId}/status`
+    const beforeDownload = await fixture.app.inject({
+      headers: signedHeaders('GET', statusPath, Buffer.alloc(0), 'nonce-outgoing-status'),
+      method: 'GET',
+      url: statusPath
+    })
+    assert.equal(beforeDownload.statusCode, 200)
+    assert.equal(beforeDownload.json().status, 'waiting_for_peer')
+
+    const chunkPath = `/v3/outgoing-transfers/${offer.transferId}/items/outgoing-item-001/chunks/0`
+    const chunk = await fixture.app.inject({
+      headers: signedHeaders('GET', chunkPath, Buffer.alloc(0), 'nonce-outgoing-chunk'),
+      method: 'GET',
+      url: chunkPath
+    })
+    assert.equal(chunk.statusCode, 200)
+    assert.equal(chunk.headers['content-type'], 'application/octet-stream')
+    assert.equal(chunk.headers['content-range'], `bytes 0-${source.length - 1}/${source.length}`)
+    const digest = createHash('sha256').update(source).digest('hex')
+    assert.equal(chunk.headers['x-flowdrop-chunk-sha256'], digest)
+    assert.deepEqual(chunk.rawPayload, source)
+
+    const acknowledgement = Buffer.from(JSON.stringify({sha256: digest, sizeBytes: source.length}), 'utf8')
+    const ackPath = `${chunkPath}/ack`
+    const acknowledged = await fixture.app.inject({
+      body: acknowledgement,
+      headers: {
+        ...signedHeaders('POST', ackPath, acknowledgement, 'nonce-outgoing-ack'),
+        'content-type': 'application/json'
+      },
+      method: 'POST',
+      url: ackPath
+    })
+    assert.equal(acknowledged.statusCode, 200)
+    assert.equal(acknowledged.json().status, 'completed')
+    assert.deepEqual(acknowledged.json().acknowledgedRanges, {'outgoing-item-001': [[0, source.length - 1]]})
   } finally {
     await fixture.cleanup()
   }
@@ -1238,11 +1297,13 @@ async function createFixture(): Promise<Fixture> {
     new V3TransferStore(path.join(root, 'transfers')),
     eventBus
   )
+  const outgoingTransferService = new V3OutgoingTransferService(path.join(root, 'outgoing'))
   const transferAuthenticator = new V3TransferAuthenticator(trustedDeviceAccess)
   const app = Fastify()
   app.addContentTypeParser('application/octet-stream', {parseAs: 'buffer'}, (_request, body, done) => done(null, body))
   app.decorate('v3TransferService', transferService)
   app.decorate('v3TransferAuthenticator', transferAuthenticator)
+  app.decorate('v3OutgoingTransferService', outgoingTransferService)
   registerLegacyTransferGoneRoutes(app)
   await app.register(v3TransportRoutes)
   await app.ready()
@@ -1257,6 +1318,7 @@ async function createFixture(): Promise<Fixture> {
       rmSync(root, {force: true, maxRetries: 3, recursive: true, retryDelay: 100})
     },
     eventBus,
+    outgoingTransferService,
     root,
     trustedDeviceStore
   }

@@ -215,6 +215,23 @@ section + section {
   margin-top: 16px;
 }
 
+.file-recipient {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.file-recipient select {
+  border: 1px solid #c6dce4;
+  border-radius: 6px;
+  color: #26323d;
+  flex: 1;
+  font: inherit;
+  max-width: 320px;
+  padding: 8px;
+}
+
 .file-action {
   background: #146c94;
   border: 1px solid #146c94;
@@ -262,10 +279,16 @@ section + section {
   border-radius: 6px;
   margin-top: 18px;
   padding: 14px;
+  max-height: 500px;
+  overflow-y: auto;
+  position: relative;
 }
 
 .file-list .section-heading {
   margin-bottom: 8px;
+  position: sticky;
+  top: -14px;
+  background-color: white;
 }
 
 .file-list ul {

@@ -1,5 +1,5 @@
 import {createHash, randomUUID} from 'node:crypto'
-import {mkdirSync, readFileSync, writeFileSync} from 'node:fs'
+import {existsSync, mkdirSync, readFileSync, writeFileSync} from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
@@ -12,6 +12,7 @@ export type LocalFileDemoTransfer = {
   fileName: string
   id: string
   mimeType: string
+  outgoingTransferId?: string
   sha256: string
   sizeBytes: number
   status: 'received' | 'waiting_for_peer'
@@ -38,6 +39,23 @@ export class LocalFileDemoStore {
     return [...this.transfers]
   }
 
+  getOutgoingSource(id: string): {fileName: string; mimeType: string; sourcePath: string} | null {
+    const transfer = this.transfers.find((candidate) => candidate.id === id && candidate.direction === 'send')
+    if (!transfer) return null
+    const sourcePath = path.join(this.outgoingDirectory, `${transfer.id}-${transfer.fileName}`)
+    return existsSync(sourcePath)
+      ? {fileName: transfer.fileName, mimeType: transfer.mimeType, sourcePath}
+      : null
+  }
+
+  linkOutgoingTransfer(fileDemoTransferId: string, outgoingTransferId: string): boolean {
+    const transfer = this.transfers.find((candidate) => candidate.id === fileDemoTransferId && candidate.direction === 'send')
+    if (!transfer || transfer.outgoingTransferId === outgoingTransferId) return Boolean(transfer)
+    transfer.outgoingTransferId = outgoingTransferId
+    this.writeHistory()
+    return true
+  }
+
   save(direction: LocalFileDemoDirection, input: {data: Buffer; fileName: string; mimeType: string}): LocalFileDemoTransfer {
     const id = randomUUID()
     const fileName = sanitizeFileName(input.fileName)
@@ -54,7 +72,7 @@ export class LocalFileDemoStore {
     const destinationDirectory = direction === 'receive' ? this.incomingDirectory : this.outgoingDirectory
     writeFileSync(path.join(destinationDirectory, `${id}-${fileName}`), input.data, {flag: 'wx'})
     this.transfers = [transfer, ...this.transfers].slice(0, MAX_HISTORY)
-    writeFileSync(this.historyPath, JSON.stringify(this.transfers, null, 2), 'utf8')
+    this.writeHistory()
     return transfer
   }
 
@@ -65,6 +83,10 @@ export class LocalFileDemoStore {
     } catch {
       return []
     }
+  }
+
+  private writeHistory() {
+    writeFileSync(this.historyPath, JSON.stringify(this.transfers, null, 2), 'utf8')
   }
 }
 
@@ -84,6 +106,7 @@ function isLocalFileDemoTransfer(value: unknown): value is LocalFileDemoTransfer
     typeof item.sha256 === 'string' &&
     typeof item.sizeBytes === 'number' &&
     typeof item.createdAt === 'number' &&
+    (item.outgoingTransferId === undefined || typeof item.outgoingTransferId === 'string') &&
     (item.status === 'received' || item.status === 'waiting_for_peer')
   )
 }
