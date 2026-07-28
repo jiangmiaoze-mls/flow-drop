@@ -6,6 +6,7 @@ import './v3Fastify'
 import {V3TransportError} from './v3TransportError'
 import {parseV3ChunkIndex, parseV3ContentRange} from './v3TransferService'
 import {V3_MAX_CREATE_BODY_BYTES} from './v3TransportTypes'
+import {V3_TEXT_MESSAGE_PAGE_LIMIT} from './v3TextMessageTypes'
 
 export const v3TransportRoutes: FastifyPluginAsync = async (fastify) => {
   const rawBodies = new WeakMap<object, Buffer>()
@@ -44,6 +45,32 @@ export const v3TransportRoutes: FastifyPluginAsync = async (fastify) => {
       assertCanonicalJsonBody(rawBody, request.body)
       const result = await fastify.v3TransferService.createIncomingTransfer(request.body, sourceDeviceId)
       return reply.code(result.created ? 201 : 200).send(result.response)
+    } catch (error) {
+      return sendV3Error(reply, error)
+    }
+  })
+
+  fastify.post('/v3/messages', async (request, reply) => {
+    try {
+      const requestPath = getRequestTarget(request)
+      if (requestPath !== '/v3/messages') throw new V3TransportError('INVALID_TEXT_MESSAGE', 400)
+      const rawBody = requireRawBody(rawBodies, request)
+      const sourceDeviceId = await authenticateRequest(fastify, request, 'POST', requestPath, rawBody)
+      assertCanonicalJsonBody(rawBody, request.body)
+      const message = await fastify.v3TextMessageService.receiveFromDevice(request.body, sourceDeviceId)
+      return reply.code(201).send({message})
+    } catch (error) {
+      return sendV3Error(reply, error)
+    }
+  })
+
+  fastify.get('/v3/messages', async (request, reply) => {
+    try {
+      const requestTarget = getRequestTarget(request, true)
+      const page = parseTextMessagePage(requestTarget)
+      if (!page) throw new V3TransportError('INVALID_TEXT_MESSAGE_PAGE', 400)
+      const sourceDeviceId = await authenticateRequest(fastify, request, 'GET', requestTarget, Buffer.alloc(0))
+      return reply.send(await fastify.v3TextMessageService.listForDevice(sourceDeviceId, page.after, page.limit))
     } catch (error) {
       return sendV3Error(reply, error)
     }
@@ -255,6 +282,15 @@ function parseChunkDigestPage(
   const limit = Number(match[2])
   if (!Number.isSafeInteger(offset) || !Number.isSafeInteger(limit) || limit > 1000) return null
   return {limit, offset}
+}
+
+function parseTextMessagePage(requestTarget: string): {after: number; limit: number} | null {
+  const match = /^\/v3\/messages\?after=(0|[1-9]\d*)&limit=([1-9]\d*)$/.exec(requestTarget)
+  if (!match) return null
+  const after = Number(match[1])
+  const limit = Number(match[2])
+  if (!Number.isSafeInteger(after) || !Number.isSafeInteger(limit) || limit > V3_TEXT_MESSAGE_PAGE_LIMIT) return null
+  return {after, limit}
 }
 
 function isRouteIdentifier(value: unknown): value is string {

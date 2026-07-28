@@ -3,6 +3,7 @@ import * as SQLite from 'expo-sqlite'
 import type {TransferFailureCode} from '@flowdrop/types'
 
 import {applyV3TransferProjectionMigration} from './v3TransferProjectionMigration'
+import {applyV3TextMessageMigration} from './v3TextMessageMigration'
 
 
 const DATABASE_NAME = 'flowdrop.sqlite'
@@ -714,9 +715,18 @@ async function getDatabase(): Promise<SQLite.SQLiteDatabase> {
   }
 }
 
+/**
+ * V3 metadata shares one async Expo SQLite connection so independent V3
+ * repositories cannot race each other while applying migrations.
+ */
+export async function getV3TransferProjectionDatabase(): Promise<SQLite.SQLiteDatabase> {
+  return getDatabase()
+}
+
 async function openMigratedDatabase(): Promise<SQLite.SQLiteDatabase> {
   const database = await SQLite.openDatabaseAsync(DATABASE_NAME)
   await applyV3TransferProjectionMigration(database)
+  await applyV3TextMessageMigration(database)
   return database
 }
 

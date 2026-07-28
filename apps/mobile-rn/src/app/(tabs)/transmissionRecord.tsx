@@ -28,6 +28,7 @@ import TransmissionRecordFilterBottomSheet, {
 import {PAGE_HORIZONTAL_PADDING} from '@/constants/layout'
 import {useTheme} from '@/hooks/use-theme'
 import {listTrustedDevices} from '@/storage/trustedDeviceRepository'
+import {listAllLocalTextMessages, type LocalTextMessage} from '@/storage/v3TextMessageRepository'
 import {listV3OutgoingTransfers, type V3OutgoingTransferTask} from '@/storage/v3TransferProjectionRepository'
 import type {
   TransferDirection,
@@ -190,9 +191,10 @@ function getTransferDirection(record: TransferRecord): TransferDirection {
 
 async function listTransferRecords(): Promise<TransferRecord[]> {
   const deviceNames = new Map(listTrustedDevices().map((device) => [device.deviceId, device.deviceName]))
-  const [v3Tasks] = await Promise.all([listV3OutgoingTransfers()])
+  const [v3Tasks, textMessages] = await Promise.all([listV3OutgoingTransfers(), listAllLocalTextMessages()])
   const v3Records = v3Tasks.flatMap((task) => toV3TransferRecords(task, deviceNames))
-  return v3Records.sort((left, right) => (right.timestamp ?? 0) - (left.timestamp ?? 0))
+  const textRecords = textMessages.map((message) => toTextMessageRecord(message, deviceNames))
+  return [...v3Records, ...textRecords].sort((left, right) => (right.timestamp ?? 0) - (left.timestamp ?? 0))
 }
 
 function toV3TransferRecords(
@@ -217,6 +219,30 @@ function getV3ItemFileType(mimeType: string, name: string): RecordFileType {
   if (mimeType.startsWith('image/') || /\.(heic|jpeg|jpg|png|webp)$/i.test(name)) return 'image'
   if (mimeType.startsWith('video/') || /\.(mov|mp4|mkv|webm)$/i.test(name)) return 'video'
   return 'document'
+}
+
+function toTextMessageRecord(
+  message: LocalTextMessage,
+  deviceNames: Map<string, string>
+): TransferRecord {
+  const incoming = message.deliveryState === 'received'
+  return {
+    detail: message.content,
+    direction: incoming ? 'receive' : 'send',
+    fileType: 'text',
+    id: `text:${message.messageId}`,
+    name: '文字消息',
+    peerDeviceName: deviceNames.get(message.peerDeviceId) ?? message.peerDeviceId,
+    status: textDeliveryStatus(message.deliveryState),
+    time: formatTime(message.createdAt),
+    timestamp: message.createdAt
+  }
+}
+
+function textDeliveryStatus(state: LocalTextMessage['deliveryState']): RecordStatus {
+  if (state === 'failed') return 'failed'
+  if (state === 'sending') return 'transferring'
+  return 'completed'
 }
 
 function buildDateSections(records: TransferRecord[]): RecordSection[] {

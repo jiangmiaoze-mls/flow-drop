@@ -120,6 +120,90 @@ section + section {
   padding: 24px 28px;
 }
 
+.message-section {
+  margin-top: 32px;
+}
+
+.message-device-label {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.message-device-label select,
+.message-composer textarea {
+  border: 1px solid #c6dce4;
+  border-radius: 6px;
+  color: #26323d;
+  font: inherit;
+}
+
+.message-device-label select {
+  min-width: 220px;
+  padding: 8px;
+}
+
+.message-list {
+  border: 1px solid #d8dde3;
+  border-radius: 6px;
+  max-height: 340px;
+  min-height: 96px;
+  overflow-y: auto;
+  padding: 12px;
+}
+
+.message-row {
+  display: flex;
+  margin: 8px 0;
+}
+
+.message-row.outgoing {
+  justify-content: flex-end;
+}
+
+.message-bubble {
+  background: #edf2f5;
+  border-radius: 6px;
+  max-width: 78%;
+  padding: 9px 11px;
+}
+
+.message-row.outgoing .message-bubble {
+  background: #146c94;
+}
+
+.message-bubble p {
+  color: #26323d;
+  margin: 0;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.message-row.outgoing .message-bubble p,
+.message-row.outgoing .message-bubble small {
+  color: #ffffff;
+}
+
+.message-bubble small {
+  display: block;
+  margin-top: 5px;
+}
+
+.message-composer {
+  align-items: flex-end;
+  display: flex;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.message-composer textarea {
+  min-height: 72px;
+  padding: 9px;
+  resize: vertical;
+  width: 100%;
+}
+
 .file-demo-actions,
 .file-demo-grid {
   display: grid;

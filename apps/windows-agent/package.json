@@ -11,6 +11,8 @@
     "test": "npm run build:ts && tsc -p test/tsconfig.json && c8 node --test -r ts-node/register \"test/**/*.ts\"",
     "migrate:v3:up": "npm run build:ts && node dist/transfers/v3MigrationCli.js up",
     "migrate:v3:down": "npm run build:ts && node dist/transfers/v3MigrationCli.js down",
+    "migrate:text:up": "npm run build:ts && node dist/transfers/v3TextMessageMigrationCli.js up",
+    "migrate:text:down": "npm run build:ts && node dist/transfers/v3TextMessageMigrationCli.js down",
     "start": "npm run build:ts && fastify start -a 0.0.0.0 -l info dist/app.js",
     "build:ts": "tsc",
     "watch:ts": "tsc -w",

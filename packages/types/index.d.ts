@@ -110,7 +110,7 @@ export type AgentEvent = {
   eventId: string
   occurredAt: number
   payload: unknown
-  type: 'device.changed' | 'file-demo.changed' | 'pairing.requested' | 'pairing.resolved' | 'permission.changed' | 'transfer.changed'
+  type: 'device.changed' | 'file-demo.changed' | 'message.changed' | 'pairing.requested' | 'pairing.resolved' | 'permission.changed' | 'transfer.changed'
 }
 
 export type PeerMessage<TPayload = unknown> = {

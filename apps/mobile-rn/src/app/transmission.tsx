@@ -6,9 +6,16 @@ import {SafeAreaView} from 'react-native-safe-area-context'
 
 import {Header} from '@/components/Header'
 import {BasicAlertDialog} from '@/components/BasicAlertDialog'
+import TextDeliveryBottomSheet, {type TextDeliveryBottomSheetRef} from '@/components/TextDeliveryBottomSheet'
 import {PAGE_HORIZONTAL_PADDING} from '@/constants/layout'
 import {useTheme} from '@/hooks/use-theme'
 import {getDeviceId} from '@/network/discoveryService'
+import {
+  pollV3TextMessages,
+  sendV3TextMessage,
+  textMessageByteLength,
+  V3_TEXT_MESSAGE_MAX_BYTES
+} from '@/network/v3TextMessageClient'
 import {
   cancelNativeTransfer,
   getNativeTransferSnapshot,
@@ -34,6 +41,14 @@ import {
   type V3TransferStatus
 } from '@/storage/v3TransferProjectionRepository'
 import {useV3TransferProjectionStore} from '@/store/useV3TransferProjectionStore'
+import {
+  latestTextMessageCursor,
+  markTextMessageDelivery,
+  markTextMessageFailed,
+  saveOutgoingTextMessage,
+  saveReceivedTextMessages,
+  type LocalTextMessage
+} from '@/storage/v3TextMessageRepository'
 import * as Crypto from 'expo-crypto'
 import * as DocumentPicker from 'expo-document-picker'
 
@@ -76,9 +91,11 @@ export default function Transmission() {
   const resolvePendingOperation = useV3TransferProjectionStore((state) => state.resolvePendingOperation)
   const isMounted = useRef(false)
   const hydratedPeers = useRef(new Set<string>())
+  const lastTextPollingError = useRef<string | null>(null)
   const presentedFailureEvents = useRef(new Set<string>())
   const [isChoosingFiles, setIsChoosingFiles] = useState(false)
   const [resendingTransferIds, setResendingTransferIds] = useState<Set<string>>(() => new Set())
+  const textDeliverySheetRef = useRef<TextDeliveryBottomSheetRef>(null)
   const [transferError, setTransferError] = useState<string | null>(null)
   const nativeControllerAvailable = isNativeTransferControllerAvailable()
   const deviceName = params.name || '未知设备'
@@ -127,6 +144,82 @@ export default function Transmission() {
   const reportTransferError = useCallback((error: unknown) => {
     if (isMounted.current) setTransferError(getTransferErrorMessage(error))
   }, [])
+
+  const syncIncomingTextMessages = useCallback(async () => {
+    const peer = getTransferPeer()
+    if (!peer) return
+    const localDeviceId = await getDeviceId()
+    let after = await latestTextMessageCursor(peer.id, localDeviceId)
+    while (true) {
+      const page = await pollV3TextMessages(
+        {address: peer.ip, controlPort: peer.controlPort, deviceId: peer.id},
+        after
+      )
+      await saveReceivedTextMessages(peer.id, page.messages, localDeviceId)
+      if (page.messages.length === 0 || page.nextAfter === after) return
+      after = page.nextAfter
+    }
+  }, [getTransferPeer])
+
+  useEffect(() => {
+    if (!isPaired) return
+    let active = true
+    const refresh = async () => {
+      try {
+        await syncIncomingTextMessages()
+        lastTextPollingError.current = null
+      } catch (error) {
+        const message = getTextMessageErrorMessage(error)
+        if (active && lastTextPollingError.current !== message) {
+          lastTextPollingError.current = message
+          setTransferError(message)
+        }
+      }
+    }
+    void refresh()
+    const timer = setInterval(() => void refresh(), 3_000)
+    return () => {
+      active = false
+      clearInterval(timer)
+    }
+  }, [isPaired, syncIncomingTextMessages])
+
+  const handleSendText = useCallback(async (content: string): Promise<boolean> => {
+    const peer = getTransferPeer()
+    if (!peer) {
+      setTransferError('无法确定对方设备地址，请返回设备列表后重试。')
+      return false
+    }
+    if (textMessageByteLength(content) < 1 || textMessageByteLength(content) > V3_TEXT_MESSAGE_MAX_BYTES) return false
+
+    const messageId = Crypto.randomUUID()
+    try {
+      const localDeviceId = await getDeviceId()
+      const optimistic: LocalTextMessage = {
+        content,
+        contentBytes: textMessageByteLength(content),
+        createdAt: Date.now(),
+        deliveryState: 'sending',
+        messageId,
+        peerDeviceId: peer.id,
+        recipientDeviceId: peer.id,
+        senderDeviceId: localDeviceId,
+        sequence: 0
+      }
+      await saveOutgoingTextMessage(optimistic)
+      const accepted = await sendV3TextMessage(
+        {address: peer.ip, controlPort: peer.controlPort, deviceId: peer.id},
+        {content, messageId}
+      )
+      await markTextMessageDelivery(accepted, peer.id)
+      await syncIncomingTextMessages()
+      return true
+    } catch (error) {
+      await markTextMessageFailed(messageId).catch(() => undefined)
+      if (isMounted.current) setTransferError(getTextMessageErrorMessage(error))
+      return false
+    }
+  }, [getTransferPeer, syncIncomingTextMessages])
 
   const startNativeTask = useCallback(async (transferId: string, recovering: boolean): Promise<boolean> => {
     if (!nativeControllerAvailable) {
@@ -503,21 +596,23 @@ export default function Transmission() {
           </Pressable>
 
           <Pressable
-            accessibilityLabel="文字投递功能将在后续版本恢复"
+            accessibilityLabel="投递文字消息"
             accessibilityRole="button"
-            accessibilityState={{disabled: true}}
-            disabled
-            style={[
+            accessibilityState={{disabled: !isPaired}}
+            disabled={!isPaired}
+            onPress={() => textDeliverySheetRef.current?.present()}
+            style={({pressed}) => [
               styles.actionCard,
-              styles.actionDisabled,
-              {backgroundColor: theme.background, borderColor: theme.backgroundElement}
+              !isPaired && styles.actionDisabled,
+              {backgroundColor: theme.background, borderColor: theme.backgroundElement},
+              pressed && styles.actionPressed
             ]}>
             <SymbolView
               name={{ios: 'text.bubble', android: 'chat', web: 'chat'}}
               size={42}
               tintColor={theme.textSecondary}
             />
-            <Text style={[styles.secondaryActionText, {color: theme.textSecondary}]}>文字投递功能将在后续版本恢复</Text>
+            <Text style={[styles.secondaryActionText, {color: theme.textSecondary}]}>投递文字</Text>
           </Pressable>
         </View>
 
@@ -683,6 +778,12 @@ export default function Transmission() {
         ) : null}
       </ScrollView>
 
+      <TextDeliveryBottomSheet
+        onSubmit={(text) => void handleSendText(text)}
+        ref={textDeliverySheetRef}
+        targetName={deviceName}
+      />
+
       <BasicAlertDialog
         message={transferError ?? ''}
         onConfirm={() => setTransferError(null)}
@@ -830,6 +931,18 @@ function getTransferErrorCode(error: unknown): string {
 
 function getTransferErrorMessage(error: unknown): string {
   return getTransferFailureMessage(getTransferErrorCode(error))
+}
+
+function getTextMessageErrorMessage(error: unknown): string {
+  const code = error instanceof Error ? error.message : 'TEXT_ENDPOINT_UNAVAILABLE'
+  switch (code) {
+    case 'AUTHENTICATION_REQUIRED': return '文字投递需要有效配对凭据，请重新配对。'
+    case 'TRANSFER_RECEIVE_DISABLED': return '对方当前不接受来自此设备的文字消息。'
+    case 'INVALID_TEXT_MESSAGE': return '文字内容必须为 1 至 1500 个 UTF-8 字节。'
+    case 'TRANSFER_ENDPOINT_UNAVAILABLE': return '无法连接对方设备，消息已保存为发送失败。'
+    case 'DEVICE_NOT_PAIRED': return '对方未保存此设备的配对关系，请重新配对。'
+    default: return `文字消息发送失败（${code}）。`
+  }
 }
 
 function getTransferFailureMessage(code: string | undefined): string {

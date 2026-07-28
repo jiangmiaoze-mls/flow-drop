@@ -8,7 +8,7 @@
     "scheme": "mobilern",
     "userInterfaceStyle": "automatic",
     "ios": {
-      "icon": "./assets/expo.icon",
+      "icon": "./assets/images/icon.png",
       "infoPlist": {
         "NSLocalNetworkUsageDescription": "允许 FlowDrop 在本地网络中发现其他设备。"
       }

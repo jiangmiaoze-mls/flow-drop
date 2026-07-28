@@ -5,6 +5,7 @@ import path from 'node:path'
 import type {AgentEvent, PairingApprovalStatusResponse} from '@flowdrop/types'
 import {LocalFileDemoStore, type LocalFileDemoDirection} from './localFileDemoStore'
 import {initiateMobilePairing} from '../pairing/mobilePairingInitiator'
+import {V3TransportError} from '../transfers/v3TransportError'
 import '../transfers/v3Fastify'
 
 
@@ -33,6 +34,26 @@ export function createAdminApp(peer: FastifyInstance): FastifyInstance {
   admin.get('/api/trusted-devices', async () => ({devices: peer.trustedDeviceStore.list()}))
 
   admin.get('/api/transfers', async () => ({transfers: await peer.v3TransferService.listIncomingTransfersForAdmin()}))
+
+  admin.get('/api/messages', async (request, reply) => {
+    const {deviceId} = request.query as {deviceId?: unknown}
+    if (typeof deviceId !== 'string') return reply.code(400).send({message: 'A paired device ID is required.'})
+    try {
+      return {messages: await peer.v3TextMessageService.listConversation(deviceId)}
+    } catch (error) {
+      return reply.code(400).send({message: error instanceof Error ? error.message : 'Unable to load text messages.'})
+    }
+  })
+
+  admin.post('/api/messages', async (request, reply) => {
+    try {
+      const message = await peer.v3TextMessageService.sendFromAgent(request.body)
+      return reply.code(201).send({message})
+    } catch (error) {
+      const statusCode = error instanceof V3TransportError ? error.statusCode : 400
+      return reply.code(statusCode).send({message: error instanceof Error ? error.message : 'Unable to send text message.'})
+    }
+  })
 
   admin.get('/api/file-demo/transfers', async () => ({transfers: localFileDemoStore.list()}))
 

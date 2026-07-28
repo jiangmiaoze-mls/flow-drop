@@ -69,6 +69,16 @@ type PeerTransfer = {
   updatedAt: number
 }
 
+type TextMessage = {
+  content: string
+  contentBytes: number
+  createdAt: number
+  messageId: string
+  recipientDeviceId: string
+  senderDeviceId: string
+  sequence: number
+}
+
 async function getDevices(): Promise<DeviceResponse> {
   const response = await fetch('/api/devices')
   if (!response.ok) throw new Error('Unable to load devices.')
@@ -95,6 +105,13 @@ async function getPeerTransfers(): Promise<PeerTransfer[]> {
   return payload.transfers
 }
 
+async function getTextMessages(deviceId: string): Promise<TextMessage[]> {
+  const response = await fetch(`/api/messages?deviceId=${encodeURIComponent(deviceId)}`)
+  if (!response.ok) throw new Error('Unable to load text messages.')
+  const payload = await response.json() as {messages: TextMessage[]}
+  return payload.messages
+}
+
 export default function App() {
   const isMounted = useRef(true)
   const [data, setData] = useState<DeviceResponse>({devices: [], trustedDevices: []})
@@ -108,6 +125,10 @@ export default function App() {
   const [updatingDeviceId, setUpdatingDeviceId] = useState<string | null>(null)
   const [session, setSession] = useState<PairingSession | null>(null)
   const [pendingPairingRequests, setPendingPairingRequests] = useState<PairingApprovalRequest[]>([])
+  const [messageContent, setMessageContent] = useState('')
+  const [messageDeviceId, setMessageDeviceId] = useState('')
+  const [messages, setMessages] = useState<TextMessage[]>([])
+  const [sendingMessage, setSendingMessage] = useState(false)
 
   const refresh = useCallback(async () => {
     try {
@@ -154,12 +175,32 @@ export default function App() {
     eventSource.addEventListener('pairing.resolved', handleAgentEvent)
     eventSource.addEventListener('permission.changed', handleAgentEvent)
     eventSource.addEventListener('transfer.changed', handleTransferEvent)
+    eventSource.addEventListener('message.changed', handleAgentEvent)
 
     return () => {
       isMounted.current = false
       eventSource.close()
     }
   }, [refresh])
+
+  useEffect(() => {
+    if (!messageDeviceId) {
+      setMessages([])
+      return
+    }
+    void getTextMessages(messageDeviceId)
+      .then((nextMessages) => {
+        if (isMounted.current) setMessages(nextMessages)
+      })
+      .catch(() => {
+        if (isMounted.current) setError('无法加载文字消息。')
+      })
+  }, [data.trustedDevices, messageDeviceId])
+
+  useEffect(() => {
+    if (messageDeviceId || data.trustedDevices.length === 0) return
+    setMessageDeviceId(data.trustedDevices[0].deviceId)
+  }, [data.trustedDevices, messageDeviceId])
 
   const createSession = useCallback(async () => {
     setIsCreatingSession(true)
@@ -255,6 +296,36 @@ export default function App() {
       if (isMounted.current) setError(error instanceof Error ? error.message : '无法向手机发起配对。')
     }
   }, [refresh])
+
+  const sendTextMessage = useCallback(async () => {
+    const content = messageContent
+    if (!messageDeviceId || new TextEncoder().encode(content).length < 1 || new TextEncoder().encode(content).length > 1500) {
+      if (isMounted.current) setError('文字内容必须为 1 至 1500 个 UTF-8 字节。')
+      return
+    }
+    setSendingMessage(true)
+    try {
+      const response = await fetch('/api/messages', {
+        body: JSON.stringify({content, messageId: crypto.randomUUID(), recipientDeviceId: messageDeviceId}),
+        headers: {'content-type': 'application/json'},
+        method: 'POST'
+      })
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null) as {message?: string} | null
+        throw new Error(payload?.message || 'Unable to send text message.')
+      }
+      const nextMessages = await getTextMessages(messageDeviceId)
+      if (isMounted.current) {
+        setMessageContent('')
+        setMessages(nextMessages)
+        setError(null)
+      }
+    } catch (error) {
+      if (isMounted.current) setError(error instanceof Error ? error.message : '文字消息发送失败。')
+    } finally {
+      if (isMounted.current) setSendingMessage(false)
+    }
+  }, [messageContent, messageDeviceId])
 
   const uploadFileDemo = useCallback(async (direction: LocalFileDemoDirection, file: File) => {
     if (file.size > 32 * 1024 * 1024) {
@@ -372,6 +443,43 @@ export default function App() {
           <FileDemoList emptyText="还没有接收的演示文件" title="已接收" transfers={receivedFiles}/>
           <FileDemoList emptyText="还没有待发送文件" title="发送队列" transfers={sendingFiles}/>
         </div>
+      </section>
+
+      <section className="message-section" aria-labelledby="message-title">
+        <div className="section-heading">
+          <div>
+            <h2 id="message-title">文字消息</h2>
+            <p className="section-description">消息正文直接保存在双方 SQLite，单条最多 1500 个 UTF-8 字节。</p>
+          </div>
+        </div>
+        {data.trustedDevices.length === 0 ? <p className="empty">请先配对手机后发送文字消息</p> : (
+          <>
+            <label className="message-device-label">
+              <span>接收设备</span>
+              <select onChange={(event) => setMessageDeviceId(event.target.value)} value={messageDeviceId}>
+                {data.trustedDevices.map((device) => <option key={device.deviceId} value={device.deviceId}>{device.deviceName}</option>)}
+              </select>
+            </label>
+            <div className="message-list" aria-live="polite">
+              {messages.length === 0 ? <p className="empty">尚无文字消息</p> : messages.map((message) => {
+                const outgoing = message.senderDeviceId !== messageDeviceId
+                return <div className={`message-row ${outgoing ? 'outgoing' : ''}`} key={message.messageId}>
+                  <div className="message-bubble">
+                    <p>{message.content}</p>
+                    <small>{new Date(message.createdAt).toLocaleString()}</small>
+                  </div>
+                </div>
+              })}
+            </div>
+            <div className="message-composer">
+              <textarea maxLength={1500} onChange={(event) => setMessageContent(event.target.value)} placeholder="输入文字消息" value={messageContent}/>
+              <button disabled={sendingMessage || new TextEncoder().encode(messageContent).length < 1 || new TextEncoder().encode(messageContent).length > 1500} onClick={() => void sendTextMessage()} type="button">
+                {sendingMessage ? '发送中' : '发送'}
+              </button>
+            </div>
+            <small>{new TextEncoder().encode(messageContent).length} / 1500 UTF-8 字节</small>
+          </>
+        )}
       </section>
 
       <section aria-labelledby="peer-transfers-title">
